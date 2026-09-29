@@ -1,0 +1,942 @@
+// Pantalla de cobro.
+// Flujo: paciente → qué se hizo → confirmar → listo.
+// Nada se escribe directo en las tablas: todo va a la cola (js/cola.js),
+// que llama a las funciones de la base (sql/02_cobro.sql).
+(function () {
+  'use strict';
+  const C = window.Calculo;
+  const CFG = window.MEK_CONFIG;
+  const $ = (s) => document.querySelector(s);
+  const plata = C.plata;
+
+  const MEDIOS = [
+    ['efectivo', 'Efectivo'], ['transferencia', 'Transferencia'], ['debito', 'Débito'],
+    ['credito', 'Crédito'], ['mercadopago', 'Mercado Pago'],
+  ];
+  const nombreMedio = (m) => (MEDIOS.find((x) => x[0] === m) || [m, m])[1];
+
+  const LS = {
+    get(k, d) { try { const v = localStorage.getItem('mek.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('mek.' + k, JSON.stringify(v)); } catch (e) { /* lleno o bloqueado */ } },
+    del(k) { try { localStorage.removeItem('mek.' + k); } catch (e) { /* nada */ } },
+  };
+
+  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
+    auth: { persistSession: true, autoRefreshToken: true, storageKey: 'mek.auth' },
+  });
+
+  const hoy = () => new Date().toLocaleDateString('en-CA');   // AAAA-MM-DD, hora local
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  let uidSeq = 0;
+
+  const S = {
+    usuario: LS.get('usuario', null),
+    cat: LS.get('catalogo', null),
+    pacientes: LS.get('pacientes', []),
+    ventasHoy: LS.get('ventasHoy', []),
+    pendientes: LS.get('pendientes', []),
+    sinRegla: 0,
+    fecha: hoy(),
+    paciente: null,
+    items: [],
+    pagos: [{ medio: null, monto: null }],
+    nota: '',
+    tab: 'tratamientos',
+    filtro: '',
+    depi: { sexo: 'mujer', zonas: [] },
+    cobrandoPendiente: null,   // id de venta de la bandeja que se está cobrando
+    pagosPendiente: [{ medio: null, monto: null }],
+  };
+
+  // ------------------------------------------------------------------
+  // Carga de datos
+  // ------------------------------------------------------------------
+  async function cargarCatalogo() {
+    const q = (t, sel) => sb.from(t).select(sel || '*');
+    const res = await Promise.all([
+      q('profesionales').eq('activo', true).order('id'),
+      q('tratamientos').eq('activo', true).order('nombre'),
+      q('precios_tratamiento'),
+      q('reglas_comision'),
+      q('zonas_depilacion').eq('activo', true),
+      q('promos_depilacion').eq('activo', true).order('id'),
+      q('promo_zonas'),
+      q('escala_depilacion').order('posicion'),
+      q('productos').eq('activo', true).eq('tipo', 'reventa').order('nombre'),
+      q('packs', 'id,paciente_ref,nombre,tratamiento_id,precio_pagado,sesiones_totales,estado,pack_sesiones(consumida_en)')
+        .eq('estado', 'activo'),
+    ]);
+    const err = res.find((r) => r.error);
+    if (err) throw err.error;
+    const [prof, trat, prec, reg, zon, pro, pz, esc_, prod, packs] = res.map((r) => r.data);
+    S.cat = {
+      profesionales: prof, tratamientos: trat, precios: prec, reglas: reg, zonas: zon,
+      promos: pro, promoZonas: pz, escala: esc_, productos: prod,
+      packs: packs.map((p) => ({
+        id: p.id, paciente_ref: p.paciente_ref, nombre: p.nombre, tratamiento_id: p.tratamiento_id,
+        precio_pagado: p.precio_pagado, sesiones_totales: p.sesiones_totales,
+        disponibles: p.pack_sesiones.filter((s) => !s.consumida_en).length,
+      })),
+      cargado: new Date().toISOString(),
+    };
+    LS.set('catalogo', S.cat);
+  }
+
+  async function cargarPacientesEspejo() {
+    const todos = [];
+    for (let desde = 0; ; desde += 1000) {
+      const { data, error } = await sb.from('pacientes').select('ref,nombre,telefono,email')
+        .order('ref').range(desde, desde + 999);
+      if (error) throw error;
+      todos.push(...data);
+      if (data.length < 1000) break;
+    }
+    S.pacientes = todos;
+    LS.set('pacientes', todos);
+  }
+
+  async function sincronizarPacientes(completo) {
+    const estado = $('#pacientesEstado');
+    try {
+      const conocidos = new Set(S.pacientes.map((p) => p.ref));
+      const r = await window.Pacientes.sincronizar(sb, conocidos, completo, (n, t) => {
+        estado.textContent = 'Trayendo pacientes del dashboard… ' + n + ' de ' + t;
+      });
+      if (r.nuevos.length) await cargarPacientesEspejo();
+      estado.textContent = S.pacientes.length + ' pacientes' +
+        (r.nuevos.length ? ' · ' + r.nuevos.length + (completo ? ' actualizadas' : ' nuevas') : '');
+    } catch (e) {
+      estado.textContent = 'No se pudo leer el dashboard (' + (e.message || e) + '). Se usa la lista guardada: ' +
+        S.pacientes.length + ' pacientes.';
+    }
+  }
+
+  async function cargarVentas() {
+    const sel = 'id,fecha,paciente_ref,estado,medio_pago,nota,creado_por,client_id,' +
+                'pacientes(nombre),venta_items(tipo,descripcion,precio_cobrado),venta_pagos(medio,monto)';
+    const [h, p, s] = await Promise.all([
+      sb.from('ventas').select(sel).eq('fecha', S.fecha).order('id', { ascending: false }),
+      sb.from('ventas').select(sel).eq('estado', 'pendiente').order('fecha').order('id'),
+      S.usuario && S.usuario.rol === 'admin'
+        ? sb.from('v_items_sin_regla').select('item_id', { count: 'exact', head: true })
+        : Promise.resolve({ count: 0 }),
+    ]);
+    if (h.error) throw h.error;
+    if (p.error) throw p.error;
+    S.ventasHoy = h.data;
+    S.pendientes = p.data;
+    S.sinRegla = s.count || 0;
+    LS.set('ventasHoy', S.ventasHoy);
+    LS.set('pendientes', S.pendientes);
+  }
+
+  async function refrescar() {
+    if (!navigator.onLine) { render(); return; }
+    try {
+      await window.Cola.procesar(sb);
+      await Promise.all([cargarCatalogo(), cargarVentas()]);
+    } catch (e) {
+      toast('No se pudo actualizar: ' + (e.message || e), 'error');
+    }
+    render();
+  }
+
+  // ------------------------------------------------------------------
+  // Sesión
+  // ------------------------------------------------------------------
+  async function traerUsuario() {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return null;
+    const { data, error } = await sb.from('usuarios').select('nombre,rol,profesional_id')
+      .eq('user_id', user.id).maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+
+  function mostrar(pantalla) {
+    $('#login').hidden = pantalla !== 'login';
+    $('#cobro').hidden = pantalla !== 'cobro';
+    $('#usuario').hidden = pantalla !== 'cobro';
+    $('#sync').hidden = pantalla !== 'cobro';
+  }
+
+  async function entrar(ev) {
+    ev.preventDefault();
+    const errEl = $('#loginError');
+    errEl.hidden = true;
+    const { error } = await sb.auth.signInWithPassword({
+      email: $('#loginEmail').value.trim(), password: $('#loginPass').value,
+    });
+    if (error) { errEl.textContent = 'No se pudo entrar: ' + error.message; errEl.hidden = false; return; }
+    $('#loginPass').value = '';
+    try {
+      const u = await traerUsuario();
+      if (!u) {
+        errEl.textContent = 'Tu usuario existe pero no está habilitado en la app (falta correr sql/03_usuarios.sql).';
+        errEl.hidden = false;
+        await sb.auth.signOut();
+        return;
+      }
+      S.usuario = u;
+      LS.set('usuario', u);
+    } catch (e) {
+      errEl.textContent = 'Error: ' + (e.message || e); errEl.hidden = false; return;
+    }
+    await arrancarCobro();
+  }
+
+  async function salir() {
+    const pend = window.Cola.leer().length;
+    if (pend && !confirm('Hay ' + pend + ' operaciones sin subir. Si cerrás sesión quedan guardadas en este navegador, ' +
+                         'pero no se suben hasta que alguien vuelva a entrar acá. ¿Cerrar igual?')) return;
+    await sb.auth.signOut();
+    S.usuario = null;
+    LS.del('usuario');
+    mostrar('login');
+  }
+
+  async function arrancarCobro() {
+    mostrar('cobro');
+    $('#usuarioNombre').textContent = S.usuario.nombre;
+    $('#syncPacientes').hidden = S.usuario.rol !== 'admin';
+    render();
+    if (!navigator.onLine) return;
+    try {
+      await Promise.all([cargarCatalogo(), cargarPacientesEspejo(), cargarVentas()]);
+    } catch (e) {
+      toast('No se pudo cargar todo: ' + (e.message || e), 'error');
+    }
+    render();
+    sincronizarPacientes(false).then(render);
+    window.Cola.procesar(sb).then(refrescarSiCambio);
+  }
+
+  // ------------------------------------------------------------------
+  // Ticket
+  // ------------------------------------------------------------------
+  function profDefault() {
+    return (S.usuario && S.usuario.profesional_id) || LS.get('ultimoProf', null);
+  }
+
+  function agregarItem(it) {
+    it.uid = ++uidSeq;
+    it.cantidad = it.cantidad || 1;
+    it.costo_insumo = null;
+    if (it.precio_cobrado === undefined) it.precio_cobrado = precioLista(it);  // variable: null, hay que escribirlo
+    S.items.push(it);
+    render();
+    const inp = document.querySelector('[data-precio="' + it.uid + '"]');
+    if (inp && it.precio_cobrado == null) inp.focus();
+    toast('Agregado', 'ok', 900);
+  }
+
+  // Precio completo de lista, el que paga la paciente (sin descontar la
+  // parte de una profesional externa).
+  function precioLista(it) {
+    return C.calcularItem(S.cat, Object.assign({}, it, { precio_cobrado: null, profesional_id: null }), S.fecha).lista;
+  }
+
+  function necesitaProf(it) {
+    if (it.tipo === 'depilacion') return true;
+    if (it.tipo !== 'tratamiento') return false;
+    const t = S.cat.tratamientos.find((x) => x.id === it.tratamiento_id);
+    return t && t.categoria !== 'cabina';
+  }
+
+  function calcular() {
+    const filas = S.items.map((it) => ({ it, r: C.calcularItem(S.cat, it, S.fecha) }));
+    const total = C.r2(filas.reduce((a, f) => a + (f.r.cobrado || 0), 0));
+    return { filas, total };
+  }
+
+  function lineaComision(r) {
+    if (r.sinRegla) return '<div class="alerta">⚠ ' + esc(r.avisos.find((a) => a.startsWith('No hay regla'))) + '</div>';
+    if (!r.comision) return '';
+    const c = r.comision, p = c.prof;
+    const cuanto = c.tipo === 'porcentaje' ? c.valor + '%' : plata(c.valor) + ' fijo';
+    if (p.modelo === 'invitado_cobra_mek') {
+      return '<div class="com tercero">Para ' + esc(p.nombre) + ' (' + cuanto + '): <b>' + plata(r.tercero) +
+             '</b> · queda para MEK ' + plata(C.r2(r.cobrado - r.tercero)) + '</div>';
+    }
+    if (p.modelo === 'invitado_cobra_el') {
+      return '<div class="com tercero">Cobra ' + esc(p.nombre) + ' y se lleva ' + cuanto +
+             '. Entra a MEK: <b>' + plata(r.parteMek) + '</b></div>';
+    }
+    if (c.monto === 0) return '<div class="com">Sin comisión (queda todo para MEK)</div>';
+    return '<div class="com">Comisión ' + esc(p.nombre.split(' ')[0]) + ' (' + cuanto + '): <b>' + plata(c.monto) + '</b></div>';
+  }
+
+  function htmlItem(f) {
+    const { it, r } = f;
+    const trat = it.tratamiento_id && S.cat.tratamientos.find((t) => t.id === it.tratamiento_id);
+    const prof = it.profesional_id && S.cat.profesionales.find((p) => p.id === it.profesional_id);
+    const cobraEl = prof && prof.modelo === 'invitado_cobra_el';
+    const variable = trat && trat.precio_variable;
+    const mg = C.margen(r);
+    const opciones = S.cat.profesionales.map((p) =>
+      '<option value="' + p.id + '"' + (p.id === it.profesional_id ? ' selected' : '') + '>' + esc(p.nombre) + '</option>').join('');
+    let ref = '';
+    if (variable && trat.precio_min != null) ref = 'Referencia ' + plata(trat.precio_min) + '–' + plata(trat.precio_max);
+    else if (variable) ref = 'Precio a presupuestar';
+    else if (r.lista != null && !cobraEl) ref = 'Lista ' + plata(r.lista) +
+      (r.cobrado != null && r.cobrado !== r.lista ? ' · <span class="dif">' + (r.cobrado < r.lista ? '−' : '+') +
+       plata(Math.abs(C.r2(r.cobrado - r.lista))) + '</span>' : '');
+
+    return '<div class="item' + (r.errores.length ? ' con-error' : '') + '" data-uid="' + it.uid + '">' +
+      '<div class="item-top"><div class="desc">' + esc(r.descripcion || '—') + '</div>' +
+      '<button type="button" class="quitar" data-quitar="' + it.uid + '" aria-label="Quitar">✕</button></div>' +
+      (necesitaProf(it) ? '<label class="fila">Lo hizo <select data-prof="' + it.uid + '">' +
+        '<option value="">— elegir —</option>' + opciones + '</select></label>' : '') +
+      '<div class="fila precio"><label>' + (cobraEl ? 'Pagó la paciente' : 'Cobrado') + ' $' +
+        '<input type="number" inputmode="decimal" min="0" step="1" data-precio="' + it.uid + '" value="' +
+        (it.precio_cobrado == null ? '' : it.precio_cobrado) + '" placeholder="' + (variable ? 'Monto' : '') + '"></label>' +
+        (it.tipo === 'producto' ? '<label>Cant. <input type="number" min="1" step="1" class="cant" data-cant="' + it.uid +
+          '" value="' + it.cantidad + '"></label>' : '') +
+        '<span class="ref">' + ref + '</span></div>' +
+      lineaComision(r) +
+      r.avisos.filter((a) => !a.startsWith('No hay regla')).map((a) => '<div class="aviso">' + esc(a) + '</div>').join('') +
+      r.errores.map((e) => '<div class="error">' + esc(e) + '</div>').join('') +
+      '<div class="margen">Margen: ' + (mg == null ? '<i>sin dato</i>' : plata(mg)) +
+        ' · <button type="button" class="link" data-costo="' + it.uid + '">' +
+        (it.costo_insumo == null ? 'cargar costo de insumo' : 'costo ' + plata(it.costo_insumo)) + '</button></div>' +
+      '</div>';
+  }
+
+  function htmlPagos(pagos, total, prefijo) {
+    const filas = pagos.map((p, i) => {
+      const ultimo = i === pagos.length - 1 && pagos.length > 1;
+      return '<div class="pago">' +
+        '<div class="medios">' + MEDIOS.map(([k, n]) =>
+          '<button type="button" class="medio' + (p.medio === k ? ' activo' : '') + '" data-' + prefijo + 'medio="' + i +
+          '" data-valor="' + k + '">' + n + '</button>').join('') + '</div>' +
+        (pagos.length > 1 ? '<label class="monto">$ <input type="number" inputmode="decimal" min="0" data-' + prefijo +
+          'monto="' + i + '" value="' + (p.monto == null ? '' : p.monto) + '"' + (ultimo ? ' readonly title="Se calcula solo: lo que falta"' : '') +
+          '></label>' + '<button type="button" class="link" data-' + prefijo + 'sacar="' + i + '">sacar</button>' : '') +
+        '</div>';
+    }).join('');
+    return filas + '<button type="button" class="link" data-' + prefijo + 'dividir>' +
+      (pagos.length > 1 ? '+ otro medio' : 'Pagó con dos medios') + '</button>';
+  }
+
+  // En pagos divididos, el último medio se completa con lo que falta.
+  function ajustarPagos(pagos, total) {
+    if (pagos.length === 1) { pagos[0].monto = total; return; }
+    const otros = pagos.slice(0, -1).reduce((a, p) => a + (Number(p.monto) || 0), 0);
+    pagos[pagos.length - 1].monto = C.r2(total - otros);
+  }
+
+  function validarPagos(pagos, total) {
+    if (total === 0) return null;
+    if (pagos.some((p) => !p.medio)) return 'Elegí el medio de pago';
+    if (pagos.some((p) => !(Number(p.monto) > 0))) return 'Hay un pago sin monto o negativo';
+    const suma = C.r2(pagos.reduce((a, p) => a + Number(p.monto), 0));
+    if (suma !== total) return 'Los pagos suman ' + plata(suma) + ' y el total es ' + plata(total);
+    return null;
+  }
+
+  function renderTicket() {
+    const el = $('#ticket');
+    if (!S.items.length) {
+      el.innerHTML = '<p class="tenue">Elegí lo que se hizo en el paso 2.</p>';
+      renderBarraMovil(0);
+      return;
+    }
+    const { filas, total } = calcular();
+    ajustarPagos(S.pagos, total);
+    const errores = filas.some((f) => f.r.errores.length);
+    const errPago = validarPagos(S.pagos, total);
+    const faltaPaciente = !S.paciente;
+
+    el.innerHTML = filas.map(htmlItem).join('') +
+      '<div class="total"><span>Total</span><b>' + plata(total) + '</b></div>' +
+      (total > 0 ? '<div class="pagos">' + htmlPagos(S.pagos, total, 't') + '</div>' : '') +
+      '<label class="nota">Nota <input type="text" id="nota" value="' + esc(S.nota) + '" placeholder="Opcional"></label>' +
+      (faltaPaciente ? '<div class="error">Falta elegir la paciente</div>' : '') +
+      '<div class="acciones">' +
+        '<button type="button" class="primario grande" id="btnCobrar"' +
+          (errores || faltaPaciente || errPago ? ' disabled' : '') + '>' +
+          (total > 0 ? 'Cobrar ' + plata(total) : 'Confirmar') + '</button>' +
+        '<button type="button" class="secundario" id="btnPendiente"' + (errores || faltaPaciente ? ' disabled' : '') +
+          '>Se fue sin pagar · guardar sin cobrar</button>' +
+      '</div>' +
+      (errPago && !errores && !faltaPaciente && total > 0 ? '<div class="tenue centro">' + esc(errPago) + '</div>' : '');
+    renderBarraMovil(total);
+  }
+
+  function renderBarraMovil(total) {
+    const b = $('#barraMovil');
+    b.hidden = !S.items.length;
+    b.innerHTML = '<span>' + S.items.length + (S.items.length === 1 ? ' ítem' : ' ítems') + ' · <b>' + plata(total) +
+      '</b></span><button type="button" class="primario" id="irTicket">Ver y cobrar</button>';
+  }
+
+  function limpiarTicket() {
+    S.items = [];
+    S.pagos = [{ medio: null, monto: null }];
+    S.nota = '';
+    S.paciente = null;
+    $('#buscarPaciente').value = '';
+  }
+
+  function payloadItem(it) {
+    const o = { tipo: it.tipo, cantidad: it.cantidad, precio_cobrado: it.precio_cobrado };
+    if (it.tratamiento_id) o.tratamiento_id = it.tratamiento_id;
+    if (it.producto_id) o.producto_id = it.producto_id;
+    if (it.pack_id) o.pack_id = it.pack_id;
+    if (it.tipo === 'depilacion') { o.sexo = it.sexo; o.zona_ids = it.zona_ids; }
+    if (it.profesional_id) o.profesional_id = it.profesional_id;
+    if (it.costo_insumo != null) o.costo_insumo = it.costo_insumo;
+    return o;
+  }
+
+  function nuevaVenta(estado, items, pagos) {
+    const p = S.paciente;
+    return {
+      fecha: S.fecha, paciente_ref: p.ref,
+      paciente: { ref: p.ref, nombre: p.nombre, telefono: p.telefono, email: p.email },
+      estado, pagos: estado === 'cobrada' ? pagos.filter((x) => Number(x.monto) > 0) : [],
+      nota: S.nota || null, items,
+    };
+  }
+
+  function confirmar(estado) {
+    const { filas, total } = calcular();
+    if (filas.some((f) => f.r.errores.length) || !S.paciente) return;
+    if (estado === 'cobrada') {
+      const e = validarPagos(S.pagos, total);
+      if (e) { toast(e, 'error'); return; }
+    }
+    const sinRegla = filas.filter((f) => f.r.sinRegla);
+    if (sinRegla.length && !confirm('Sin regla de comisión:\n\n' +
+        sinRegla.map((f) => '• ' + f.r.descripcion + ' — ' +
+          S.cat.profesionales.find((p) => p.id === f.it.profesional_id).nombre).join('\n') +
+        '\n\nSe guarda sin comisión y queda en la lista para que Franco cargue la regla. ¿Seguir?')) return;
+
+    const venta = nuevaVenta(estado, S.items.map(payloadItem), S.pagos.map((x) => ({ medio: x.medio, monto: Number(x.monto) })));
+    const op = window.Cola.agregar('venta', venta);
+    const nombre = S.paciente.nombre;
+    const prof = S.items.map((i) => i.profesional_id).find(Boolean);
+    if (prof && !(S.usuario && S.usuario.profesional_id)) LS.set('ultimoProf', prof);
+    limpiarTicket();
+    render();
+    toast((estado === 'cobrada' ? 'Cobrado: ' : 'Guardado sin cobrar: ') + nombre + ' · ' + plata(total) +
+          (navigator.onLine ? '' : ' (sin conexión: se sube solo)'), 'ok');
+    subir();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return op;
+  }
+
+  // Un toque: consume una sesión del pack y la registra ya.
+  function usarSesion(packId) {
+    const pk = S.cat.packs.find((p) => p.id === packId);
+    if (!pk || pk.disponibles <= 0) return;
+    const tp = S.cat.tratamientos.find((t) => t.id === pk.tratamiento_id);
+    const ts = tp && tp.pack_tratamiento_id ? S.cat.tratamientos.find((t) => t.id === tp.pack_tratamiento_id) : tp;
+    const item = { tipo: 'pack_sesion', pack_id: pk.id, cantidad: 1 };
+    if (!ts || ts.categoria !== 'cabina') {
+      const prof = profDefault();
+      if (!prof) { toast('Elegí quién hizo la sesión (en el menú de profesional del ticket)', 'error'); return; }
+      item.profesional_id = prof;
+    }
+    const r = C.calcularItem(S.cat, item, S.fecha);
+    if (r.errores.length) { toast(r.errores.join(' · '), 'error'); return; }
+    const venta = nuevaVenta('cobrada', [item], []);
+    const op = window.Cola.agregar('venta', venta);
+    pk.disponibles--;
+    LS.set('catalogo', S.cat);
+    render();
+    toast(r.descripcion + ' registrada', 'ok', 6000, {
+      texto: 'Deshacer',
+      accion: () => {
+        window.Cola.agregar('anular', { client_id: op.payload.client_id, motivo: 'Sesión cargada por error (deshacer)' });
+        pk.disponibles++;
+        LS.set('catalogo', S.cat);
+        render();
+        subir();
+        toast('Sesión devuelta al pack', 'ok');
+      },
+    });
+    subir();
+  }
+
+  // ------------------------------------------------------------------
+  // Paciente
+  // ------------------------------------------------------------------
+  function buscarPacientes(q) {
+    const palabras = norm(q).split(/\s+/).filter(Boolean);
+    if (!palabras.length) return [];
+    return S.pacientes.filter((p) => { const n = norm(p.nombre); return palabras.every((w) => n.includes(w)); })
+      .sort((a, b) => a.nombre.localeCompare(b.nombre)).slice(0, 8);
+  }
+
+  function renderPaciente() {
+    const box = $('#pacienteElegido');
+    $('#pacienteBuscar').hidden = !!S.paciente;
+    box.hidden = !S.paciente;
+    if (!S.paciente) {
+      const q = $('#buscarPaciente').value;
+      const res = buscarPacientes(q);
+      $('#resultadosPaciente').innerHTML = res.map((p) =>
+        '<li><button type="button" data-paciente="' + esc(p.ref) + '"><b>' + esc(p.nombre) + '</b>' +
+        (p.telefono ? '<span class="tenue"> · …' + esc(String(p.telefono).slice(-4)) + '</span>' : '') + '</button></li>').join('') +
+        (q.trim() && !res.length ? '<li class="tenue">No aparece. Tiene que estar cargada en el dashboard; ' +
+          'si la acaban de cargar, esperá unos segundos y buscá de nuevo.</li>' : '');
+      if (!$('#pacientesEstado').textContent) $('#pacientesEstado').textContent = S.pacientes.length + ' pacientes';
+      return;
+    }
+    const packs = S.cat ? S.cat.packs.filter((p) => p.paciente_ref === S.paciente.ref && p.disponibles > 0) : [];
+    box.innerHTML = '<div class="paciente"><b>' + esc(S.paciente.nombre) + '</b>' +
+      '<button type="button" class="link" id="cambiarPaciente">cambiar</button></div>' +
+      (packs.length ? '<div class="packs">' + packs.map((p) =>
+        '<button type="button" class="pack" data-sesion="' + p.id + '"><span>' + esc(p.nombre) + '</span>' +
+        '<b>Usar sesión</b><small>' + p.disponibles + ' de ' + p.sesiones_totales + ' disponibles</small></button>').join('') +
+        '</div>' : '');
+  }
+
+  // ------------------------------------------------------------------
+  // Catálogo
+  // ------------------------------------------------------------------
+  function renderCatalogo() {
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('activo', b.dataset.tab === S.tab));
+    const el = $('#catalogo');
+    if (!S.cat) { el.innerHTML = '<p class="tenue">Cargando catálogo…</p>'; return; }
+    const precio = (t) => {
+      if (t.precio_variable) return t.precio_min != null ? plata(t.precio_min) + '–' + plata(t.precio_max) : 'a presupuestar';
+      const p = C.precioVigente(S.cat, t.id, S.fecha);
+      return p == null ? 'sin precio' : plata(p);
+    };
+
+    if (S.tab === 'tratamientos') {
+      const f = norm(S.filtro);
+      const lista = S.cat.tratamientos.filter((t) => t.categoria !== 'cabina' && (!f || norm(t.nombre).includes(f)));
+      const cats = [...new Set(lista.map((t) => t.categoria))];
+      el.innerHTML = '<input type="search" id="filtroTrat" placeholder="Filtrar…" value="' + esc(S.filtro) + '">' +
+        cats.map((c) => '<h3>' + esc(c.replace('_', ' ')) + '</h3><div class="grilla">' +
+          lista.filter((t) => t.categoria === c).map((t) =>
+            '<button type="button" class="opcion" data-trat="' + t.id + '"><span>' + esc(t.nombre) + '</span><small>' +
+            precio(t) + '</small></button>').join('') + '</div>').join('');
+    } else if (S.tab === 'cabina') {
+      const lista = S.cat.tratamientos.filter((t) => t.categoria === 'cabina');
+      el.innerHTML = '<div class="grilla">' + lista.map((t) =>
+        '<button type="button" class="opcion" data-cabina="' + t.id + '"><span>' + esc(t.nombre) + '</span><small>' +
+        precio(t) + (t.pack_sesiones ? ' · ' + t.pack_sesiones + ' sesiones' : '') + '</small></button>').join('') + '</div>' +
+        '<p class="tenue">Para usar una sesión de un pack ya comprado, elegí la paciente: aparece arriba.</p>';
+    } else if (S.tab === 'productos') {
+      el.innerHTML = S.cat.productos.length ? '<div class="grilla">' + S.cat.productos.map((p) =>
+        '<button type="button" class="opcion" data-prod="' + p.id + '"><span>' + esc(p.nombre) + '</span><small>' +
+        (p.precio_venta == null ? 'sin precio' : plata(p.precio_venta)) + '</small></button>').join('') + '</div>'
+        : '<p class="tenue">No hay productos de reventa cargados.</p>';
+    } else {
+      renderDepilacion(el);
+    }
+  }
+
+  function renderDepilacion(el) {
+    const d = S.depi;
+    const zonas = C.zonasVigentes(S.cat, d.sexo, S.fecha).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    const promos = S.cat.promos.filter((p) => p.sexo === d.sexo);
+    const cot = d.zonas.length ? C.cotizarDepilacion(S.cat, d.zonas, d.sexo, S.fecha) : null;
+    const suelto = d.zonas.reduce((a, id) => a + Number((S.cat.zonas.find((z) => z.id === id) || {}).precio || 0), 0);
+    el.innerHTML =
+      '<div class="sexo">' + ['mujer', 'hombre'].map((s) =>
+        '<button type="button" data-sexo="' + s + '" class="' + (d.sexo === s ? 'activo' : '') + '">' +
+        (s === 'mujer' ? 'Mujer' : 'Hombre') + '</button>').join('') + '</div>' +
+      '<h3>Promos</h3><div class="grilla">' + promos.map((p) => {
+        const zs = S.cat.promoZonas.filter((x) => x.promo_id === p.id)
+          .map((x) => S.cat.zonas.find((z) => z.id === x.zona_id)).filter(Boolean);
+        return '<button type="button" class="opcion' + (cot && cot.promo && cot.promo.id === p.id ? ' activo' : '') +
+          '" data-promo="' + p.id + '"><span>' + esc(p.nombre) + '</span><small>' + esc(zs.map((z) => z.nombre).join(' + ')) +
+          ' · ' + plata(p.precio_fijado) + '</small></button>';
+      }).join('') + '</div>' +
+      '<h3>Zonas</h3><div class="zonas">' + zonas.map((z) =>
+        '<label class="zona"><input type="checkbox" data-zona="' + z.id + '"' + (d.zonas.includes(z.id) ? ' checked' : '') +
+        '> ' + esc(z.nombre) + ' <small>' + plata(z.precio) + '</small></label>').join('') + '</div>' +
+      '<div class="cotizacion">' + (cot
+        ? (cot.promo ? '<b>' + esc(cot.promo.nombre) + '</b>: ' : 'Combinación libre: ') + '<b>' + plata(cot.precio) + '</b>' +
+          (suelto !== cot.precio ? ' <span class="tenue">(sueltas ' + plata(suelto) + ')</span>' : '') +
+          '<button type="button" class="primario" id="agregarDepi">Agregar</button>'
+        : '<span class="tenue">Tocá una promo o marcá las zonas.</span>') + '</div>';
+  }
+
+  // ------------------------------------------------------------------
+  // Bandeja "sin cobrar" y cargado hoy
+  // ------------------------------------------------------------------
+  function ventasEnCola() {
+    return window.Cola.leer().filter((o) => o.tipo === 'venta').map((o) => ({
+      client_id: o.payload.client_id, fecha: o.payload.fecha, estado: o.payload.estado,
+      pacienteNombre: o.payload.paciente ? o.payload.paciente.nombre : o.payload.paciente_ref,
+      descripcion: o.payload.items.map((i) => descItem(i)).join(' + '),
+      total: o.payload.items.reduce((a, i) => a + (i.tipo === 'pack_sesion' ? 0 : Number(i.precio_cobrado) || 0), 0),
+      enCola: true, error: o.error,
+    }));
+  }
+
+  function descItem(i) {
+    if (!S.cat) return i.tipo;
+    try { return C.calcularItem(S.cat, i, S.fecha).descripcion || i.tipo; } catch (e) { return i.tipo; }
+  }
+
+  const deServidor = (v) => ({
+    id: v.id, client_id: v.client_id, fecha: v.fecha, estado: v.estado, medio: v.medio_pago,
+    pacienteNombre: v.pacientes ? v.pacientes.nombre : v.paciente_ref,
+    descripcion: v.venta_items.map((i) => i.descripcion).join(' + '),
+    total: v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0),
+    pagos: v.venta_pagos || [], nota: v.nota,
+  });
+
+  function operacionesSobre(v) {
+    return window.Cola.leer().filter((o) => o.tipo !== 'venta' &&
+      ((v.id && o.payload.venta_id === v.id) || (v.client_id && o.payload.client_id === v.client_id)));
+  }
+
+  function renderBandeja() {
+    const el = $('#bandeja');
+    const cola = ventasEnCola().filter((v) => v.estado === 'pendiente');
+    const srv = S.pendientes.map(deServidor).filter((v) => !cola.some((c) => c.client_id === v.client_id));
+    const lista = cola.concat(srv).filter((v) => !operacionesSobre(v).length);
+    el.hidden = !lista.length;
+    if (!lista.length) return;
+    el.innerHTML = '<h2>Sin cobrar (' + lista.length + ')</h2>' + lista.map((v) => {
+      const key = v.id ? 'id:' + v.id : 'c:' + v.client_id;
+      const abierto = S.cobrandoPendiente === key;
+      if (abierto) ajustarPagos(S.pagosPendiente, C.r2(v.total));
+      return '<div class="pend">' +
+        '<div class="pend-top"><div><b>' + esc(v.pacienteNombre) + '</b> · ' + esc(v.descripcion) +
+        '<div class="tenue">' + (v.fecha === hoy() ? 'hoy' : C.fechaCorta(v.fecha)) + (v.enCola ? ' · sin sincronizar' : '') +
+        '</div></div><b>' + plata(v.total) + '</b></div>' +
+        (abierto
+          ? '<div class="pagos">' + htmlPagos(S.pagosPendiente, v.total, 'b') + '</div>' +
+            '<div class="acciones fila"><button type="button" class="primario" data-cobrarpend="' + key + '">Cobrar ' +
+            plata(v.total) + '</button><button type="button" class="link" data-cerrarpend>cancelar</button></div>'
+          : '<div class="acciones fila"><button type="button" class="primario" data-abrirpend="' + key + '">Cobrar</button>' +
+            '<button type="button" class="link" data-anular="' + key + '">anular</button></div>') +
+        '</div>';
+    }).join('');
+  }
+
+  function renderHoy() {
+    $('#tituloHoy').textContent = S.fecha === hoy() ? 'Cargado hoy' : 'Cargado el ' + C.fechaCorta(S.fecha);
+    const cola = ventasEnCola().filter((v) => v.fecha === S.fecha);
+    const srv = S.ventasHoy.map(deServidor).filter((v) => !cola.some((c) => c.client_id === v.client_id));
+    const lista = cola.concat(srv);
+    const el = $('#hoy');
+    if (!lista.length) { el.innerHTML = '<p class="tenue">Todavía nada.</p>'; return; }
+    const cobrado = lista.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total, 0);
+    el.innerHTML = '<div class="tenue">Cobrado (bruto, caja): <b>' + plata(C.r2(cobrado)) + '</b></div>' +
+      lista.map((v) => {
+        const ops = operacionesSobre(v);
+        const anulando = ops.some((o) => o.tipo === 'anular');
+        const estado = anulando ? 'anulando…' : v.estado;
+        const key = v.id ? 'id:' + v.id : 'c:' + v.client_id;
+        const pagos = v.pagos && v.pagos.length > 1 ? v.pagos.map((p) => nombreMedio(p.medio) + ' ' + plata(p.monto)).join(' + ')
+          : (v.medio ? nombreMedio(v.medio) : '');
+        return '<div class="hoy ' + esc(v.estado) + (anulando ? ' anulada' : '') + '">' +
+          '<div><b>' + esc(v.pacienteNombre) + '</b> · ' + esc(v.descripcion) +
+          '<div class="tenue">' + esc(estado) + (pagos ? ' · ' + esc(pagos) : '') +
+          (v.enCola ? ' · <span class="sin-sync">' + (v.error ? 'error' : 'sin sincronizar') + '</span>' : '') + '</div></div>' +
+          '<div class="der"><b>' + plata(v.total) + '</b>' +
+          (v.estado !== 'anulada' && !anulando ? '<button type="button" class="link" data-anular="' + key + '">anular</button>' : '') +
+          '</div></div>';
+      }).join('');
+  }
+
+  function renderSync() {
+    const ops = window.Cola.leer();
+    const errores = ops.filter((o) => o.error).length;
+    const b = $('#sync');
+    b.className = 'sync' + (errores ? ' mal' : ops.length ? ' espera' : ' ok') + (navigator.onLine ? '' : ' offline');
+    b.textContent = errores ? errores + (errores === 1 ? ' operación con error' : ' operaciones con error')
+      : ops.length ? ops.length + (ops.length === 1 ? ' operación sin sincronizar' : ' operaciones sin sincronizar')
+      : '✓ Todo sincronizado';
+    if (!navigator.onLine) b.textContent = 'Sin conexión · ' + b.textContent;
+    if (S.sinRegla) b.textContent += ' · ' + S.sinRegla + ' sin regla de comisión';
+  }
+
+  function renderAvisoFecha() {
+    const a = $('#avisoFecha');
+    a.hidden = S.fecha === hoy();
+    a.textContent = 'Estás cargando con fecha ' + C.fechaCorta(S.fecha) + ', no la de hoy.';
+  }
+
+  function render() {
+    if (!S.usuario) return;
+    renderAvisoFecha();
+    renderSync();
+    renderBandeja();
+    renderPaciente();
+    renderCatalogo();
+    renderTicket();
+    renderHoy();
+  }
+
+  function renderDlgCola() {
+    const d = $('#dlgCola');
+    const ops = window.Cola.leer();
+    d.innerHTML = '<h2>Operaciones guardadas en este navegador</h2>' +
+      (ops.length ? ops.map((o) => '<div class="op"><div><b>' + esc(o.tipo) + '</b> · ' +
+        esc(new Date(o.creado).toLocaleString('es-AR')) +
+        (o.tipo === 'venta' ? ' · ' + esc(o.payload.paciente ? o.payload.paciente.nombre : o.payload.paciente_ref) : '') +
+        (o.error ? '<div class="error">' + esc(o.error) + '</div>' : '<div class="tenue">esperando conexión (' + o.intentos + ' intentos)</div>') +
+        '</div>' + (o.error ? '<div class="fila"><button type="button" data-reintentar="' + o.id + '">Reintentar</button>' +
+        '<button type="button" class="link peligro" data-descartar="' + o.id + '">descartar</button></div>' : '') +
+        '</div>').join('') : '<p class="tenue">No hay nada pendiente.</p>') +
+      '<div class="acciones fila"><button type="button" id="subirAhora" class="primario">Subir ahora</button>' +
+      '<button type="button" id="cerrarDlg">Cerrar</button></div>';
+  }
+
+  // ------------------------------------------------------------------
+  // Eventos
+  // ------------------------------------------------------------------
+  let refrescoPendiente = null;
+  async function subir() {
+    const antes = window.Cola.leer().length;
+    await window.Cola.procesar(sb);
+    await refrescarSiCambio(antes);
+  }
+  async function refrescarSiCambio(antes) {
+    if (antes !== undefined && window.Cola.leer().length === antes) { renderSync(); return; }
+    clearTimeout(refrescoPendiente);
+    refrescoPendiente = setTimeout(async () => {
+      try { await Promise.all([cargarVentas(), cargarCatalogo()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
+      render();
+    }, 300);
+  }
+
+  function buscarVentaKey(key) {
+    const [t, v] = key.split(/:(.+)/);
+    return t === 'id' ? { venta_id: Number(v) } : { client_id: v };
+  }
+
+  function totalDeKey(key) {
+    const k = buscarVentaKey(key);
+    const v = ventasEnCola().concat(S.pendientes.map(deServidor))
+      .find((x) => (k.venta_id && x.id === k.venta_id) || (k.client_id && x.client_id === k.client_id));
+    return v ? C.r2(v.total) : 0;
+  }
+
+  function onClick(ev) {
+    const t = ev.target.closest('button, [data-paciente]');
+    if (!t) return;
+    const d = t.dataset;
+
+    if (d.paciente) {
+      S.paciente = S.pacientes.find((p) => p.ref === d.paciente);
+      render();
+      return;
+    }
+    if (t.id === 'cambiarPaciente') { S.paciente = null; render(); $('#buscarPaciente').focus(); return; }
+    if (d.sesion) { usarSesion(Number(d.sesion)); return; }
+    if (d.tab) { S.tab = d.tab; renderCatalogo(); return; }
+
+    if (d.trat) { agregarItem({ tipo: 'tratamiento', tratamiento_id: Number(d.trat), profesional_id: profDefault() }); return; }
+    if (d.cabina) {
+      const tr = S.cat.tratamientos.find((x) => x.id === Number(d.cabina));
+      agregarItem({ tipo: tr.pack_sesiones ? 'pack_venta' : 'cabina', tratamiento_id: tr.id });
+      return;
+    }
+    if (d.prod) { agregarItem({ tipo: 'producto', producto_id: Number(d.prod) }); return; }
+
+    if (d.sexo) { S.depi = { sexo: d.sexo, zonas: [] }; renderCatalogo(); return; }
+    if (d.promo) {
+      S.depi.zonas = S.cat.promoZonas.filter((x) => x.promo_id === Number(d.promo)).map((x) => x.zona_id);
+      renderCatalogo();
+      return;
+    }
+    if (t.id === 'agregarDepi') {
+      agregarItem({ tipo: 'depilacion', sexo: S.depi.sexo, zona_ids: S.depi.zonas.slice(), profesional_id: profDefault() });
+      S.depi.zonas = [];
+      renderCatalogo();
+      return;
+    }
+
+    if (d.quitar) { S.items = S.items.filter((i) => i.uid !== Number(d.quitar)); render(); return; }
+    if (d.costo) {
+      const it = S.items.find((i) => i.uid === Number(d.costo));
+      const v = prompt('Costo de insumo de este ítem (vacío = sin dato):', it.costo_insumo == null ? '' : it.costo_insumo);
+      if (v === null) return;
+      it.costo_insumo = v.trim() === '' ? null : Math.max(0, Number(v.replace(',', '.')) || 0);
+      renderTicket();
+      return;
+    }
+
+    // pagos del ticket (prefijo t) y de la bandeja (prefijo b)
+    for (const [pre, lista] of [['t', S.pagos], ['b', S.pagosPendiente]]) {
+      if (d[pre + 'medio'] !== undefined) {
+        lista[Number(d[pre + 'medio'])].medio = d.valor;
+        pre === 't' ? renderTicket() : renderBandeja();
+        return;
+      }
+      if (d[pre + 'dividir'] !== undefined) {
+        if (lista.length === 1) lista[0].monto = null;
+        lista.push({ medio: null, monto: null });
+        pre === 't' ? renderTicket() : renderBandeja();
+        return;
+      }
+      if (d[pre + 'sacar'] !== undefined) {
+        lista.splice(Number(d[pre + 'sacar']), 1);
+        pre === 't' ? renderTicket() : renderBandeja();
+        return;
+      }
+    }
+
+    if (t.id === 'btnCobrar') { confirmar('cobrada'); return; }
+    if (t.id === 'btnPendiente') { confirmar('pendiente'); return; }
+    if (t.id === 'irTicket') { $('#ticketCard').scrollIntoView({ behavior: 'smooth' }); return; }
+
+    if (d.abrirpend) { S.cobrandoPendiente = d.abrirpend; S.pagosPendiente = [{ medio: null, monto: null }]; renderBandeja(); return; }
+    if (d.cerrarpend !== undefined) { S.cobrandoPendiente = null; renderBandeja(); return; }
+    if (d.cobrarpend) {
+      const total = totalDeKey(d.cobrarpend);
+      ajustarPagos(S.pagosPendiente, total);
+      const e = validarPagos(S.pagosPendiente, total);
+      if (e) { toast(e, 'error'); return; }
+      const pagos = S.pagosPendiente.map((x) => ({ medio: x.medio, monto: Number(x.monto) }));
+      const k = buscarVentaKey(d.cobrarpend);
+      if (!(k.client_id && window.Cola.cobrarEnCola(k.client_id, pagos))) {
+        window.Cola.agregar('cobrar', Object.assign(k, { pagos }));
+      }
+      S.cobrandoPendiente = null;
+      render();
+      toast('Cobrado ' + plata(total), 'ok');
+      subir();
+      return;
+    }
+    if (d.anular) {
+      const motivo = prompt('¿Por qué se anula? (queda registrado; la venta no se borra)');
+      if (!motivo || !motivo.trim()) return;
+      window.Cola.agregar('anular', Object.assign(buscarVentaKey(d.anular), { motivo: motivo.trim() }));
+      render();
+      subir();
+      return;
+    }
+
+    if (t.id === 'sync') { renderDlgCola(); $('#dlgCola').showModal(); return; }
+    if (t.id === 'cerrarDlg') { $('#dlgCola').close(); return; }
+    if (t.id === 'subirAhora') { subir().then(() => { renderDlgCola(); }); return; }
+    if (d.reintentar) { window.Cola.reintentar(d.reintentar); subir().then(renderDlgCola); return; }
+    if (d.descartar) {
+      if (confirm('Esta operación NO está en la base. Si la descartás, se pierde. ¿Descartar?') &&
+          confirm('¿Seguro? Anotá los datos antes si hace falta.')) {
+        window.Cola.quitar(d.descartar);
+        renderDlgCola();
+        render();
+      }
+      return;
+    }
+
+    if (t.id === 'menuBtn') { $('#menu').hidden = !$('#menu').hidden; return; }
+    if (t.id === 'salir') { $('#menu').hidden = true; salir(); return; }
+    if (t.id === 'recargarCatalogo') { $('#menu').hidden = true; refrescar().then(() => toast('Catálogo actualizado', 'ok')); return; }
+    if (t.id === 'syncPacientes') {
+      $('#menu').hidden = true;
+      sincronizarPacientes(true).then(render);
+      return;
+    }
+  }
+
+  function onInput(ev) {
+    const t = ev.target;
+    const d = t.dataset;
+    if (t.id === 'buscarPaciente') { renderPaciente(); return; }
+    if (t.id === 'filtroTrat') {
+      S.filtro = t.value;
+      renderCatalogo();
+      const f = $('#filtroTrat'); f.focus(); f.setSelectionRange(f.value.length, f.value.length);
+      return;
+    }
+    if (t.id === 'nota') { S.nota = t.value; return; }
+    if (d.zona) {
+      const id = Number(d.zona);
+      S.depi.zonas = t.checked ? S.depi.zonas.concat(id) : S.depi.zonas.filter((z) => z !== id);
+      renderCatalogo();
+      return;
+    }
+    if (d.prof) {
+      S.items.find((i) => i.uid === Number(d.prof)).profesional_id = t.value ? Number(t.value) : null;
+      renderTicket();
+      return;
+    }
+    // Precio, cantidad y montos de pago: se recalcula al salir del campo
+    // (en 'change') para no perder el foco mientras se escribe.
+  }
+
+  function onChange(ev) {
+    const t = ev.target;
+    const d = t.dataset;
+    const n = (v) => (v.trim() === '' ? null : Math.max(0, Number(v.replace(',', '.'))));
+    if (t.id === 'fecha') {
+      S.fecha = t.value || hoy();
+      render();
+      if (navigator.onLine) cargarVentas().then(render).catch(() => {});
+      return;
+    }
+    if (d.precio) { S.items.find((i) => i.uid === Number(d.precio)).precio_cobrado = n(t.value); renderTicket(); return; }
+    if (d.cant) {
+      const it = S.items.find((i) => i.uid === Number(d.cant));
+      const antes = precioLista(it);
+      it.cantidad = Math.max(1, Math.round(Number(t.value) || 1));
+      // si el precio no se había tocado, sigue al de lista
+      if (it.precio_cobrado === antes) it.precio_cobrado = precioLista(it);
+      renderTicket();
+      return;
+    }
+    if (d.tmonto !== undefined) { S.pagos[Number(d.tmonto)].monto = n(t.value); renderTicket(); return; }
+    if (d.bmonto !== undefined) { S.pagosPendiente[Number(d.bmonto)].monto = n(t.value); renderBandeja(); return; }
+  }
+
+  let toastTimer = null;
+  function toast(texto, tipo, ms, boton) {
+    const t = $('#toast');
+    t.className = 'toast ' + (tipo || '');
+    t.innerHTML = '<span>' + esc(texto) + '</span>' + (boton ? '<button type="button" id="toastBtn">' + esc(boton.texto) + '</button>' : '');
+    t.hidden = false;
+    if (boton) $('#toastBtn').onclick = () => { t.hidden = true; boton.accion(); };
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms || (tipo === 'error' ? 6000 : 3500));
+  }
+
+  // ------------------------------------------------------------------
+  // Arranque
+  // ------------------------------------------------------------------
+  async function iniciar() {
+    $('#fecha').value = S.fecha;
+    document.addEventListener('click', onClick);
+    document.addEventListener('input', onInput);
+    document.addEventListener('change', onChange);
+    $('#loginForm').addEventListener('submit', entrar);
+    window.Cola.alCambiar(() => renderSync());
+    window.addEventListener('online', () => { renderSync(); refrescar(); });
+    window.addEventListener('offline', renderSync);
+    setInterval(() => { if (window.Cola.leer().length) subir(); }, 20000);
+    // Si la app queda abierta de un día para el otro, la fecha avanza sola
+    // (salvo que alguien la haya cambiado a mano).
+    let ultimoHoy = hoy();
+    setInterval(() => {
+      if (hoy() !== ultimoHoy) {
+        if (S.fecha === ultimoHoy) { S.fecha = hoy(); $('#fecha').value = S.fecha; }
+        ultimoHoy = hoy();
+        refrescar();
+      }
+    }, 60000);
+
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      navigator.serviceWorker.register('sw.js').catch(() => { /* sin cache offline */ });
+    }
+
+    const { data: { session } } = await sb.auth.getSession();
+    if (session && navigator.onLine) {
+      try {
+        const u = await traerUsuario();
+        if (u) { S.usuario = u; LS.set('usuario', u); }
+        else { S.usuario = null; LS.del('usuario'); }
+      } catch (e) { /* sin red: se usa el usuario guardado */ }
+    }
+    // Sin conexión se puede seguir cobrando con la sesión y el catálogo guardados.
+    if (S.usuario && (session || !navigator.onLine) && (S.cat || navigator.onLine)) await arrancarCobro();
+    else mostrar('login');
+  }
+
+  iniciar();
+})();

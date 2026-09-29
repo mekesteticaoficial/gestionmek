@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Cobro</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK <span>cobro</span></div>
+    <label class="fecha" title="Fecha de la atención">
+      <input type="date" id="fecha">
+    </label>
+    <button id="sync" class="sync" type="button" hidden></button>
+    <div class="usuario" id="usuario" hidden>
+      <span id="usuarioNombre"></span>
+      <button id="menuBtn" type="button" class="chico" aria-haspopup="true">⋯</button>
+      <div id="menu" class="menu" hidden>
+        <button type="button" id="syncPacientes">Actualizar pacientes del dashboard</button>
+        <button type="button" id="recargarCatalogo">Recargar precios y catálogo</button>
+        <button type="button" id="salir">Cerrar sesión</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="avisoFecha" class="aviso-fecha" hidden></div>
+
+  <!-- Login -->
+  <section id="login" class="login" hidden>
+    <form id="loginForm" class="card">
+      <h1>Entrar</h1>
+      <label>Mail <input type="email" id="loginEmail" autocomplete="username" required></label>
+      <label>Contraseña <input type="password" id="loginPass" autocomplete="current-password" required></label>
+      <button type="submit" class="primario">Entrar</button>
+      <p id="loginError" class="error" hidden></p>
+    </form>
+  </section>
+
+  <!-- Cobro -->
+  <main id="cobro" class="cobro" hidden>
+    <div class="col">
+      <section id="bandeja" class="card bandeja" hidden></section>
+
+      <section class="card">
+        <h2>1 · Paciente</h2>
+        <div id="pacienteElegido" hidden></div>
+        <div id="pacienteBuscar">
+          <input type="search" id="buscarPaciente" placeholder="Buscar por nombre o apellido…" autocomplete="off">
+          <ul id="resultadosPaciente" class="resultados"></ul>
+          <p id="pacientesEstado" class="tenue"></p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>2 · Qué se hizo</h2>
+        <nav class="tabs" id="tabs">
+          <button type="button" data-tab="tratamientos">Tratamientos</button>
+          <button type="button" data-tab="depilacion">Depilación</button>
+          <button type="button" data-tab="cabina">Cabina</button>
+          <button type="button" data-tab="productos">Productos</button>
+        </nav>
+        <div id="catalogo"></div>
+      </section>
+    </div>
+
+    <aside class="col">
+      <section class="card" id="ticketCard">
+        <h2>3 · Confirmar</h2>
+        <div id="ticket"></div>
+      </section>
+
+      <section class="card">
+        <h2 id="tituloHoy">Cargado hoy</h2>
+        <div id="hoy"></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="barraMovil" class="barra-movil" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <dialog id="dlgCola"></dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/calculo.js"></script>
+  <script src="js/cola.js"></script>
+  <script src="js/pacientes.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

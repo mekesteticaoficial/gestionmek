@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Compras</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card" id="aPagar"></section>
+
+    <section class="card">
+      <h2>Cargar una compra (remito)</h2>
+      <div class="form">
+        <label>Fecha <input type="date" id="fecha"></label>
+        <label>Proveedor <input id="proveedor" list="proveedores" placeholder="Quantum, …"></label>
+        <label>Nº de remito <input id="remito"></label>
+        <label>Condición
+          <select id="condicion">
+            <option value="contado">Contado (se paga ahora)</option>
+            <option value="cuenta_corriente">Cuenta corriente (se paga después)</option>
+          </select>
+        </label>
+        <label id="lblVence" hidden>Vence <input type="date" id="vencimiento"></label>
+        <label id="lblMedio">Pagado con
+          <select id="medio"></select>
+        </label>
+      </div>
+      <datalist id="proveedores"></datalist>
+      <div class="tabla-wrap" style="margin-top:12px"><table class="tabla" id="lineas"></table></div>
+      <button type="button" class="link" id="agregarLinea">+ otra línea</button>
+      <p class="explica"><b>Recibido</b> puede ser distinto de lo pedido (se paga lo recibido). <b>Descuento</b> es el de la línea, en pesos: el costo que cuenta es el real pagado, no el de lista.
+        <b>Unidades de venta</b>: cuántas unidades para vender salen (por ejemplo, frascos de un pote). Si no se sabe, dejalo vacío: el stock de ese producto no se toca y queda "sin dato".</p>
+      <div class="titulo-fila"><b id="totalCompra"></b><button type="button" class="primario" id="guardar">Guardar compra</button></div>
+    </section>
+
+    <section class="card">
+      <h2>Stock</h2>
+      <div class="tabla-wrap"><table class="tabla" id="stock"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Últimas compras</h2>
+      <div class="tabla-wrap"><table class="tabla" id="historial"></table></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/cola.js"></script>
+  <script src="js/compras.js"></script>
+</body>
+</html>

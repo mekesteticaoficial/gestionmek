@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Panel</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card">
+      <div class="titulo-fila">
+        <div class="chips" id="presets">
+          <button type="button" class="chip" data-p="semana">Esta semana</button>
+          <button type="button" class="chip" data-p="semana_ant">Semana pasada</button>
+          <button type="button" class="chip" data-p="mes">Este mes</button>
+          <button type="button" class="chip" data-p="mes_ant">Mes pasado</button>
+        </div>
+        <div class="form" style="grid-template-columns: repeat(3, auto)">
+          <label>Desde <input type="date" id="desde"></label>
+          <label>Hasta <input type="date" id="hasta"></label>
+          <div><button type="button" class="primario" id="ver">Ver</button></div>
+        </div>
+      </div>
+      <div id="alertas"></div>
+    </section>
+
+    <div id="contenido"></div>
+
+    <section class="card">
+      <h2>Exportar</h2>
+      <p class="explica">Baja todos los datos a un Excel: ventas (una fila por ítem), pagos, gastos, liquidaciones, packs, compras, productos y pacientes. Es tu copia para abrir fuera del sistema.</p>
+      <button type="button" class="primario" id="exportar">Descargar todo en Excel</button>
+      <span id="exportEstado" class="tenue"></span>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/panel.js"></script>
+</body>
+</html>

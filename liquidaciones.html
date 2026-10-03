@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Liquidaciones</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card">
+      <h2>Liquidar</h2>
+      <p class="explica">Entra todo lo <b>cobrado</b> hasta la fecha de corte que todavía no se liquidó, incluso de días anteriores que se cobraron tarde.
+        Una vez cerrada, la liquidación no cambia: si después se anula algo, se descuenta en la siguiente.</p>
+      <div class="form">
+        <label>Profesional <select id="prof"></select></label>
+        <label>Hasta (fecha de corte) <input type="date" id="hasta"></label>
+        <div><button type="button" class="primario" id="ver">Ver qué entra</button></div>
+      </div>
+      <div id="preview"></div>
+    </section>
+
+    <section class="card">
+      <h2>Liquidaciones cerradas</h2>
+      <div class="tabla-wrap"><table class="tabla" id="historial"></table></div>
+      <div id="detalle"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/liquidaciones.js"></script>
+</body>
+</html>

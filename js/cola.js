@@ -29,11 +29,12 @@
   }
 
   // tipo: 'venta' (payload = registrar_venta), 'cobrar' {venta_id|client_id, pagos},
-  //       'anular' {venta_id|client_id, motivo}
+  //       'anular' {venta_id|client_id, motivo},
+  //       'gasto' (payload = registrar_gasto), 'anular_gasto' {gasto_id|client_id, motivo}
   function agregar(tipo, payload) {
     const ops = leer();
     const op = { id: uuid(), tipo, payload, creado: new Date().toISOString(), intentos: 0, error: null };
-    if (tipo === 'venta') payload.client_id = op.id;
+    if (tipo === 'venta' || tipo === 'gasto') payload.client_id = op.id;
     ops.push(op);
     escribir(ops);
     return op;
@@ -66,19 +67,25 @@
     return !code || code.startsWith('PGRST3') || code === '401' || /fetch|network|jwt/i.test(err.message || '');
   }
 
-  async function idPorClient(sb, clientId) {
-    const { data, error } = await sb.from('ventas').select('id').eq('client_id', clientId).maybeSingle();
+  async function idPorClient(sb, clientId, tabla) {
+    const { data, error } = await sb.from(tabla || 'ventas').select('id').eq('client_id', clientId).maybeSingle();
     if (error) throw error;
-    if (!data) throw Object.assign(new Error('La venta todavía no subió'), { code: 'espera' });
+    if (!data) throw Object.assign(new Error('Todavía no subió'), { code: 'espera' });
     return data.id;
   }
 
   async function enviar(sb, op) {
     const p = op.payload;
-    if (op.tipo === 'venta') {
-      const { data, error } = await sb.rpc('registrar_venta', { p });
+    if (op.tipo === 'venta' || op.tipo === 'gasto') {
+      const { data, error } = await sb.rpc(op.tipo === 'venta' ? 'registrar_venta' : 'registrar_gasto', { p });
       if (error) throw error;
       return data;
+    }
+    if (op.tipo === 'anular_gasto') {
+      const gastoId = p.gasto_id || await idPorClient(sb, p.client_id, 'gastos');
+      const { error } = await sb.rpc('anular_gasto', { p_gasto: gastoId, p_motivo: p.motivo });
+      if (error) throw error;
+      return;
     }
     const ventaId = p.venta_id || await idPorClient(sb, p.client_id);
     const { error } = op.tipo === 'cobrar'

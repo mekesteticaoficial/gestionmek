@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Gastos</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <button id="sync" class="sync" type="button"></button>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card">
+      <h2>Cargar un gasto</h2>
+      <form id="form" class="form" autocomplete="off">
+        <label>Fecha <input type="date" id="fecha" required></label>
+        <label>Tipo
+          <select id="tipo">
+            <option value="costo_operativo">Costo del negocio</option>
+            <option value="retiro_socio">Retiro de socio (no es costo)</option>
+            <option value="sueldo" data-admin>Sueldo cargado a mano</option>
+          </select>
+        </label>
+        <label>Categoría <input id="categoria" list="categorias" required placeholder="alquiler, luz, insumos…"></label>
+        <label>Monto $ <input type="number" id="monto" inputmode="decimal" min="0" step="0.01" required></label>
+        <label class="ancho">Detalle <input id="descripcion" placeholder="Opcional"></label>
+        <div class="ancho">
+          <div class="campo">Cómo se pagó</div>
+          <div class="chips" id="medios"></div>
+        </div>
+        <div class="ancho"><button type="submit" class="primario">Guardar gasto</button></div>
+      </form>
+      <datalist id="categorias"></datalist>
+      <p class="explica">Los sueldos de Yael y lo que se le paga a Estefanía salen de <b>Liquidaciones</b>, y las compras de productos de <b>Compras</b> (así actualizan el stock). No se cargan acá.</p>
+    </section>
+
+    <section class="card">
+      <div class="titulo-fila">
+        <h2 id="tituloLista">Gastos del mes</h2>
+        <label class="campo">Mes <input type="month" id="mes"></label>
+      </div>
+      <div id="resumen" class="kpis"></div>
+      <div class="tabla-wrap"><table class="tabla" id="lista"></table></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/cola.js"></script>
+  <script src="js/gastos.js"></script>
+</body>
+</html>

@@ -21,9 +21,7 @@
     del(k) { try { localStorage.removeItem('mek.' + k); } catch (e) { /* nada */ } },
   };
 
-  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
-    auth: { persistSession: true, autoRefreshToken: true, storageKey: 'mek.auth' },
-  });
+  const sb = window.MEK.sb;
 
   const hoy = () => new Date().toLocaleDateString('en-CA');   // AAAA-MM-DD, hora local
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
@@ -159,6 +157,7 @@
     $('#login').hidden = pantalla !== 'login';
     $('#cobro').hidden = pantalla !== 'cobro';
     $('#usuario').hidden = pantalla !== 'cobro';
+    if (pantalla !== 'cobro') $('#nav').hidden = true;
     $('#sync').hidden = pantalla !== 'cobro';
   }
 
@@ -199,6 +198,7 @@
 
   async function arrancarCobro() {
     mostrar('cobro');
+    window.MEK.nav('cobro', S.usuario);
     $('#usuarioNombre').textContent = S.usuario.nombre;
     $('#syncPacientes').hidden = S.usuario.rol !== 'admin';
     render();
@@ -487,12 +487,59 @@
       return;
     }
     const packs = S.cat ? S.cat.packs.filter((p) => p.paciente_ref === S.paciente.ref && p.disponibles > 0) : [];
+    const tr = S.transfiriendo && packs.find((p) => p.id === S.transfiriendo);
+    const destinos = tr ? buscarPacientes(S.buscarDestino || '').filter((p) => p.ref !== S.paciente.ref) : [];
     box.innerHTML = '<div class="paciente"><b>' + esc(S.paciente.nombre) + '</b>' +
       '<button type="button" class="link" id="cambiarPaciente">cambiar</button></div>' +
       (packs.length ? '<div class="packs">' + packs.map((p) =>
-        '<button type="button" class="pack" data-sesion="' + p.id + '"><span>' + esc(p.nombre) + '</span>' +
-        '<b>Usar sesión</b><small>' + p.disponibles + ' de ' + p.sesiones_totales + ' disponibles</small></button>').join('') +
-        '</div>' : '');
+        '<div><button type="button" class="pack" data-sesion="' + p.id + '"><span>' + esc(p.nombre) + '</span>' +
+        '<b>Usar sesión</b><small>' + p.disponibles + ' de ' + p.sesiones_totales + ' disponibles</small></button>' +
+        '<button type="button" class="link" data-transferir="' + p.id + '">transferir a otra paciente</button></div>').join('') +
+        '</div>' : '') +
+      (tr ? '<div class="card" style="margin-top:8px"><b>Transferir ' + esc(tr.nombre) + ' (' + tr.disponibles + ' sesiones)</b>' +
+        '<input type="search" id="buscarDestino" placeholder="¿A quién?" value="' + esc(S.buscarDestino || '') + '" autocomplete="off">' +
+        '<ul class="resultados">' + destinos.map((p) => '<li><button type="button" data-destino="' + esc(p.ref) + '">' + esc(p.nombre) + '</button></li>').join('') +
+        '</ul><button type="button" class="link" id="cancelarTransf">cancelar</button></div>' : '') +
+      htmlHistorial();
+  }
+
+  // Últimas visitas de la paciente (solo con conexión; es una consulta).
+  function htmlHistorial() {
+    const h = S.historial;
+    if (!h || h.ref !== S.paciente.ref) return '';
+    if (h.cargando) return '<div class="historial tenue">Buscando sus últimas visitas…</div>';
+    if (!h.ventas.length) return '<div class="historial tenue">Primera vez que se le cobra en el sistema.</div>';
+    return '<div class="historial"><b>Últimas visitas</b>' + h.ventas.map((v) =>
+      '<div class="linea' + (v.estado === 'anulada' ? ' tenue' : '') + '"><span>' + C.fechaCorta(v.fecha) + ' · ' +
+      esc(v.venta_items.map((i) => i.descripcion).join(' + ')) + (v.estado === 'pendiente' ? ' <b class="error">sin cobrar</b>' : '') +
+      (v.estado === 'anulada' ? ' (anulada)' : '') + '</span><span>' +
+      plata(v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0)) + '</span></div>').join('') + '</div>';
+  }
+
+  async function cargarHistorial(ref) {
+    if (!navigator.onLine) { S.historial = null; return; }
+    S.historial = { ref, cargando: true, ventas: [] };
+    renderPaciente();
+    const { data, error } = await sb.from('ventas').select('id,fecha,estado,venta_items(descripcion,precio_cobrado)')
+      .eq('paciente_ref', ref).order('fecha', { ascending: false }).order('id', { ascending: false }).range(0, 5);
+    if (!S.historial || S.historial.ref !== ref) return;
+    S.historial = error ? null : { ref, ventas: data };
+    if (S.paciente && S.paciente.ref === ref) renderPaciente();
+  }
+
+  async function transferir(packId, ref) {
+    const pk = S.cat.packs.find((p) => p.id === packId);
+    const destino = S.pacientes.find((p) => p.ref === ref);
+    if (!confirm('¿Pasar las ' + pk.disponibles + ' sesiones de "' + pk.nombre + '" de ' + S.paciente.nombre + ' a ' + destino.nombre +
+                 '? No se devuelve plata: es la misma compra.')) return;
+    if (!navigator.onLine) { toast('Para transferir hace falta conexión', 'error'); return; }
+    const { error } = await sb.rpc('transferir_pack', { p_pack: packId, p_paciente_ref: ref, p_motivo: null });
+    if (error) { toast(error.message, 'error'); return; }
+    S.transfiriendo = null;
+    S.buscarDestino = '';
+    toast('Pack transferido a ' + destino.nombre, 'ok');
+    await cargarCatalogo().catch(() => {});
+    render();
   }
 
   // ------------------------------------------------------------------
@@ -587,7 +634,7 @@
   });
 
   function operacionesSobre(v) {
-    return window.Cola.leer().filter((o) => o.tipo !== 'venta' &&
+    return window.Cola.leer().filter((o) => (o.tipo === 'cobrar' || o.tipo === 'anular') &&
       ((v.id && o.payload.venta_id === v.id) || (v.client_id && o.payload.client_id === v.client_id)));
   }
 
@@ -723,10 +770,15 @@
 
     if (d.paciente) {
       S.paciente = S.pacientes.find((p) => p.ref === d.paciente);
+      S.transfiriendo = null;
       render();
+      cargarHistorial(S.paciente.ref);
       return;
     }
-    if (t.id === 'cambiarPaciente') { S.paciente = null; render(); $('#buscarPaciente').focus(); return; }
+    if (t.id === 'cambiarPaciente') { S.paciente = null; S.transfiriendo = null; render(); $('#buscarPaciente').focus(); return; }
+    if (d.transferir) { S.transfiriendo = Number(d.transferir); S.buscarDestino = ''; renderPaciente(); $('#buscarDestino').focus(); return; }
+    if (t.id === 'cancelarTransf') { S.transfiriendo = null; renderPaciente(); return; }
+    if (d.destino) { transferir(S.transfiriendo, d.destino); return; }
     if (d.sesion) { usarSesion(Number(d.sesion)); return; }
     if (d.tab) { S.tab = d.tab; renderCatalogo(); return; }
 
@@ -740,7 +792,8 @@
 
     if (d.sexo) { S.depi = { sexo: d.sexo, zonas: [] }; renderCatalogo(); return; }
     if (d.promo) {
-      S.depi.zonas = S.cat.promoZonas.filter((x) => x.promo_id === Number(d.promo)).map((x) => x.zona_id);
+      S.depi.zonas = S.cat.promoZonas.filter((x) => x.promo_id === Number(d.promo))
+        .map((x) => C.zonaVigente(S.cat, x.zona_id, S.fecha)).filter(Boolean).map((z) => z.id);
       renderCatalogo();
       return;
     }
@@ -840,6 +893,12 @@
     const t = ev.target;
     const d = t.dataset;
     if (t.id === 'buscarPaciente') { renderPaciente(); return; }
+    if (t.id === 'buscarDestino') {
+      S.buscarDestino = t.value;
+      renderPaciente();
+      const f = $('#buscarDestino'); f.focus(); f.setSelectionRange(f.value.length, f.value.length);
+      return;
+    }
     if (t.id === 'filtroTrat') {
       S.filtro = t.value;
       renderCatalogo();
@@ -920,10 +979,6 @@
         refrescar();
       }
     }, 60000);
-
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('sw.js').catch(() => { /* sin cache offline */ });
-    }
 
     const { data: { session } } = await sb.auth.getSession();
     if (session && navigator.onLine) {

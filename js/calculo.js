@@ -40,20 +40,41 @@
     return best;
   }
 
-  function zonasVigentes(cat, sexo, fecha) {
-    return cat.zonas.filter((z) => z.activo && z.vigente_desde <= fecha &&
-                                   (z.sexo === sexo || z.sexo === 'ambos'));
+  const clave = (z) => z.nombre + '|' + z.sexo;
+
+  // La versión de la zona vigente a la fecha (igual que fn_zona_vigente).
+  function zonaVigente(cat, id, fecha) {
+    const z = cat.zonas.find((x) => x.id === id);
+    if (!z) return null;
+    let best = null;
+    for (const x of cat.zonas) {
+      if (clave(x) === clave(z) && x.activo && x.vigente_desde <= fecha &&
+          (!best || x.vigente_desde > best.vigente_desde)) best = x;
+    }
+    return best;
   }
 
-  const clave = (z) => z.nombre + '|' + z.sexo;
+  // Una fila por zona: la de precio vigente a la fecha.
+  function zonasVigentes(cat, sexo, fecha) {
+    const porClave = new Map();
+    for (const z of cat.zonas) {
+      if (!z.activo || z.vigente_desde > fecha || (z.sexo !== sexo && z.sexo !== 'ambos')) continue;
+      const otra = porClave.get(clave(z));
+      if (!otra || z.vigente_desde > otra.vigente_desde) porClave.set(clave(z), z);
+    }
+    return [...porClave.values()];
+  }
   const mismoConjunto = (a, b) => a.length === b.length &&
     a.slice().sort().every((x, i) => x === b.slice().sort()[i]);
 
   // Promo exacta con precio fijado, o escala: de más cara a más barata,
   // 1ª 100%, 2ª 40%, 3ª 30%, 4ª y siguientes 25%. Sin piso ni redondeo.
   function cotizarDepilacion(cat, zonaIds, sexo, fecha) {
-    const zonas = zonaIds.map((id) => cat.zonas.find((z) => z.id === id)).filter(Boolean);
-    if (!zonas.length) return { precio: null, promo: null, zonas: [] };
+    const zonas = [...new Map(zonaIds.map((id) => zonaVigente(cat, id, fecha)).filter(Boolean)
+      .map((z) => [z.id, z])).values()];
+    if (!zonas.length || zonas.length !== new Set(zonaIds).size) {
+      return { precio: null, promo: null, zonas, faltan: true };
+    }
     const claves = zonas.map(clave);
 
     const promo = cat.promos
@@ -120,7 +141,8 @@
       out.descripcion = 'Depilación ' + it.sexo + ': ' +
         (c.promo ? c.promo.nombre + ' (' : '') + c.zonas.map((z) => z.nombre).join(' + ') + (c.promo ? ')' : '');
       if (c.promo && c.promo.revisar) out.avisos.push(c.promo.nombre + ': precio marcado para revisar');
-      if (!c.zonas.length) out.errores.push('Elegí al menos una zona');
+      if (!(it.zona_ids || []).length) out.errores.push('Elegí al menos una zona');
+      else if (c.faltan) out.errores.push('Hay zonas sin precio vigente a esta fecha');
       if (!prof) out.errores.push('Falta quién lo hizo');
 
     } else if (it.tipo === 'pack_sesion') {
@@ -144,7 +166,13 @@
         out.lista = out.cobrado;
         out.avisos.push('Sin precio de lista: escribí el monto');
       } else out.lista = Number(pr.precio_venta) * cant;
-      if (out.costo == null && pr.costo_promedio != null) out.costo = Number(pr.costo_promedio) * cant;
+      if (out.costo == null && pr.modalidad === 'consignacion') {
+        if (pr.margen_consignacion != null && out.cobrado != null) {
+          out.costo = r2(out.cobrado * (100 - Number(pr.margen_consignacion)) / 100);
+        }
+      } else if (out.costo == null && pr.costo_promedio != null) {
+        out.costo = r2(Number(pr.costo_promedio) * cant);
+      }
     }
 
     if (out.cobrado == null || out.cobrado < 0) {
@@ -190,9 +218,10 @@
 
   function plata(n) {
     if (n === null || n === undefined || n === '') return '—';
-    return '$' + Number(n).toLocaleString('es-AR', { maximumFractionDigits: 2 });
+    const v = Number(n);
+    return (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('es-AR', { maximumFractionDigits: 2 });
   }
   function fechaCorta(f) { const [y, m, d] = f.split('-'); return d + '/' + m + '/' + y; }
 
-  global.Calculo = { precioVigente, regla, zonasVigentes, cotizarDepilacion, calcularItem, margen, plata, fechaCorta, r2 };
+  global.Calculo = { precioVigente, regla, zonaVigente, zonasVigentes, cotizarDepilacion, calcularItem, margen, plata, fechaCorta, r2 };
 })(typeof window !== 'undefined' ? window : globalThis);

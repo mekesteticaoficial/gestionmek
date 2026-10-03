@@ -32,7 +32,8 @@ h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: 
 .error { color: var(--mal); font-size: .9rem; margin-top: 4px; }
 .aviso { color: var(--espera); font-size: .9rem; margin-top: 4px; }
 .alerta { background: var(--mal-suave); color: var(--mal); border-radius: 6px; padding: 6px 8px; font-size: .9rem; margin-top: 6px; }
-input[type=search], input[type=text], input[type=email], input[type=password], input[type=number], input[type=date], select {
+input:not([type]), input[type=search], input[type=text], input[type=email], input[type=password], input[type=number],
+input[type=date], input[type=month], select {
   border: 1px solid var(--borde); border-radius: 8px; padding: 9px 10px; background: #fff; min-height: 42px; width: 100%;
 }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--marca); outline-offset: 1px; }
@@ -181,3 +182,55 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   .toast { bottom: 84px; }
   .grilla { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
+
+/* ---------------------------------------------------------------- menú */
+.nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.nav a { color: #fff; text-decoration: none; padding: 6px 10px; border-radius: 6px; white-space: nowrap; opacity: .85; }
+.nav a:hover { background: rgba(255,255,255,.15); opacity: 1; }
+.nav a.activo { background: #fff; color: var(--marca); opacity: 1; font-weight: 600; }
+
+/* ---------------------------------------------------------------- pantallas de gestión */
+.pagina { max-width: 1180px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.dos { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; align-items: end; }
+.form label, .campo { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--tenue); }
+.form label > input, .form label > select, .campo > input, .campo > select { color: var(--texto); font-size: 1rem; }
+.form .ancho { grid-column: 1 / -1; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--borde); background: #fff; border-radius: 999px; padding: 7px 12px; min-height: 38px; }
+.chip.activo { background: var(--marca); color: #fff; border-color: var(--marca); }
+.tabla-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.tabla { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.tabla th { text-align: left; font-weight: 600; color: var(--tenue); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em;
+  border-bottom: 2px solid var(--borde); padding: 8px 8px; white-space: nowrap; }
+.tabla td { border-bottom: 1px solid var(--borde); padding: 8px 8px; vertical-align: top; }
+.tabla td.num, .tabla th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tabla tr.total td { font-weight: 700; border-top: 2px solid var(--texto); border-bottom: 0; }
+.tabla tr.anulado td { opacity: .45; text-decoration: line-through; }
+.tabla tr.rojo td { color: var(--mal); }
+.tabla input, .tabla select { min-height: 36px; padding: 6px 8px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.kpi { background: var(--card); border: 1px solid var(--borde); border-radius: var(--radio); padding: 12px 14px; }
+.kpi small { display: block; color: var(--tenue); font-size: .8rem; }
+.kpi b { display: block; font-size: 1.45rem; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .det { font-size: .8rem; color: var(--tenue); margin-top: 2px; }
+.kpi.destacado { border-color: var(--marca); background: var(--marca-suave); }
+.kpi.aparte { border-style: dashed; }
+.pill { display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 999px; background: var(--fondo); border: 1px solid var(--borde); }
+.pill.ok { background: var(--ok-suave); color: var(--ok); border-color: transparent; }
+.pill.espera { background: var(--espera-suave); color: var(--espera); border-color: transparent; }
+.pill.mal { background: var(--mal-suave); color: var(--mal); border-color: transparent; }
+.barra-h { height: 8px; background: var(--marca); border-radius: 4px; min-width: 2px; }
+.titulo-fila { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.titulo-fila h2 { margin: 0; }
+.explica { font-size: .85rem; color: var(--tenue); margin: 4px 0 10px; }
+.historial { margin-top: 10px; font-size: .88rem; }
+.historial .linea { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--borde); }
+
+@media (max-width: 860px) {
+  .pagina { padding: 12px; gap: 12px; }
+  .dos { grid-template-columns: 1fr; }
+  .nav { order: 4; width: 100%; }
+}
+.packs > div { display: flex; flex-direction: column; align-items: flex-start; }
+.packs > div > .pack { width: 100%; }

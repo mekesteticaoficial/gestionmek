@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Precios</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card">
+      <nav class="tabs" id="tabs">
+        <button type="button" data-tab="tratamientos">Tratamientos</button>
+        <button type="button" data-tab="depilacion">Depilación</button>
+        <button type="button" data-tab="comisiones">Comisiones</button>
+        <button type="button" data-tab="productos">Productos</button>
+        <button type="button" data-tab="packs">Packs</button>
+      </nav>
+      <p class="explica">Un precio nunca se pisa: se carga uno nuevo con la fecha desde la que rige. Las ventas viejas quedan con el precio de su día.</p>
+      <div id="contenido"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/calculo.js"></script>
+  <script src="js/catalogo.js"></script>
+</body>
+</html>

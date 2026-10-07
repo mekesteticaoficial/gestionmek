@@ -30,11 +30,12 @@
 
   // tipo: 'venta' (payload = registrar_venta), 'cobrar' {venta_id|client_id, pagos},
   //       'anular' {venta_id|client_id, motivo},
-  //       'gasto' (payload = registrar_gasto), 'anular_gasto' {gasto_id|client_id, motivo}
+  //       'gasto' (payload = registrar_gasto), 'anular_gasto' {gasto_id|client_id, motivo},
+  //       'pago_cuenta' (payload = registrar_pago_cuenta: pago parcial de una deudora)
   function agregar(tipo, payload) {
     const ops = leer();
     const op = { id: uuid(), tipo, payload, creado: new Date().toISOString(), intentos: 0, error: null };
-    if (tipo === 'venta' || tipo === 'gasto') payload.client_id = op.id;
+    if (tipo === 'venta' || tipo === 'gasto' || tipo === 'pago_cuenta') payload.client_id = op.id;
     ops.push(op);
     escribir(ops);
     return op;
@@ -76,8 +77,9 @@
 
   async function enviar(sb, op) {
     const p = op.payload;
-    if (op.tipo === 'venta' || op.tipo === 'gasto') {
-      const { data, error } = await sb.rpc(op.tipo === 'venta' ? 'registrar_venta' : 'registrar_gasto', { p });
+    if (op.tipo === 'venta' || op.tipo === 'gasto' || op.tipo === 'pago_cuenta') {
+      const fn = { venta: 'registrar_venta', gasto: 'registrar_gasto', pago_cuenta: 'registrar_pago_cuenta' }[op.tipo];
+      const { data, error } = await sb.rpc(fn, { p });
       if (error) throw error;
       return data;
     }

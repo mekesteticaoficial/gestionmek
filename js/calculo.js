@@ -68,7 +68,9 @@
     a.slice().sort().every((x, i) => x === b.slice().sort()[i]);
 
   // Promo exacta con precio fijado, o escala: de más cara a más barata,
-  // 1ª 100%, 2ª 40%, 3ª 30%, 4ª y siguientes 25%. Sin piso ni redondeo.
+  // 1ª 100%, 2ª 40%, 3ª 30%, 4ª y siguientes 25%, sin piso, redondeado
+  // hacia arriba al millar ($34.300 -> $35.000).
+  const REDONDEO_DEPILACION = 1000;
   function cotizarDepilacion(cat, zonaIds, sexo, fecha) {
     const zonas = [...new Map(zonaIds.map((id) => zonaVigente(cat, id, fecha)).filter(Boolean)
       .map((z) => [z.id, z])).values()];
@@ -96,7 +98,8 @@
       const e = escala.find((x) => x.posicion === Math.min(i + 1, maxPos));
       total += Number(z.precio) * Number(e.porcentaje) / 100;
     });
-    return { precio: r2(total), promo: null, zonas: ordenadas };
+    // r2 antes de redondear: que un 34.000,0000001 de coma flotante no pase a 35.000.
+    return { precio: Math.ceil(r2(total) / REDONDEO_DEPILACION) * REDONDEO_DEPILACION, promo: null, zonas: ordenadas };
   }
 
   // Calcula un ítem del ticket tal como lo va a guardar la base.
@@ -157,6 +160,12 @@
       out.descripcion = pk.nombre + ' — sesión ' + (pk.sesiones_totales - pk.disponibles + 1) + '/' + pk.sesiones_totales;
       if (pk.disponibles <= 0) out.errores.push('No le quedan sesiones');
       if (out.categoria !== 'cabina' && !prof) out.errores.push('Falta quién lo hizo');
+
+    } else if (it.tipo === 'otro') {
+      // Deuda cargada a mano con concepto libre: sin catálogo ni comisión.
+      out.descripcion = (it.descripcion || '').trim();
+      out.lista = out.cobrado;
+      if (!out.descripcion) out.errores.push('Falta el concepto');
 
     } else if (it.tipo === 'producto') {
       const pr = cat.productos.find((p) => p.id === it.producto_id);

@@ -47,9 +47,11 @@
   // Pantallas. 'admin' = solo Franco.
   const PAGINAS = [
     { id: 'cobro', href: 'index.html', nombre: 'Cobro' },
+    { id: 'deudores', href: 'deudores.html', nombre: 'Deudores' },
     { id: 'gastos', href: 'gastos.html', nombre: 'Gastos' },
     { id: 'liquidaciones', href: 'liquidaciones.html', nombre: 'Liquidaciones', admin: true },
     { id: 'panel', href: 'panel.html', nombre: 'Panel', admin: true },
+    { id: 'acreedores', href: 'acreedores.html', nombre: 'Acreedores', admin: true },
     { id: 'compras', href: 'compras.html', nombre: 'Compras', admin: true },
     { id: 'catalogo', href: 'catalogo.html', nombre: 'Precios', admin: true },
   ];
@@ -78,11 +80,17 @@
     let usuario = LS.get('usuario', null);
     const { data: { session } } = await sb.auth.getSession();
     if (!session) { location.href = 'index.html'; return null; }
-    if (navigator.onLine) {
-      try {
-        usuario = await usuarioActual();
-        if (usuario) LS.set('usuario', usuario); else LS.del('usuario');
-      } catch (e) { /* sin red: el guardado */ }
+    const verificar = async () => {
+      const u = await usuarioActual();
+      if (u) LS.set('usuario', u); else LS.del('usuario');
+      return u;
+    };
+    if (usuario) {
+      // Con el usuario guardado se abre enseguida; se confirma por detrás.
+      // Si le sacaron el permiso, en la próxima carga vuelve al login.
+      if (navigator.onLine) verificar().then((u) => { if (!u || u.rol !== usuario.rol) location.reload(); }).catch(() => {});
+    } else if (navigator.onLine) {
+      try { usuario = await verificar(); } catch (e) { /* sin red */ }
     }
     if (!usuario) { location.href = 'index.html'; return null; }
     nav(pagina, usuario);

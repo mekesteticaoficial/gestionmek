@@ -43,6 +43,7 @@
     nota: '',
     tab: 'tratamientos',
     filtro: '',
+    filtroProd: '',
     depi: { sexo: 'mujer', zonas: [] },
     cobrandoPendiente: null,   // id de venta de la bandeja que se está cobrando
     pagosPendiente: [{ medio: null, monto: null }],
@@ -79,6 +80,21 @@
       })),
       cargado: new Date().toISOString(),
     };
+    LS.set('catalogo', S.cat);
+  }
+
+  // Solo los packs (cambian con cada sesión usada). El resto del catálogo
+  // cambia poco: se recarga al abrir y con "Recargar precios y catálogo".
+  async function cargarPacks() {
+    if (!S.cat) return cargarCatalogo();
+    const { data, error } = await sb.from('packs')
+      .select('id,paciente_ref,nombre,tratamiento_id,precio_pagado,sesiones_totales,estado,pack_sesiones(consumida_en)').eq('estado', 'activo');
+    if (error) throw error;
+    S.cat.packs = data.map((p) => ({
+      id: p.id, paciente_ref: p.paciente_ref, nombre: p.nombre, tratamiento_id: p.tratamiento_id,
+      precio_pagado: p.precio_pagado, sesiones_totales: p.sesiones_totales,
+      disponibles: p.pack_sesiones.filter((s) => !s.consumida_en).length,
+    }));
     LS.set('catalogo', S.cat);
   }
 
@@ -559,11 +575,17 @@
       const f = norm(S.filtro);
       const lista = S.cat.tratamientos.filter((t) => t.categoria !== 'cabina' && (!f || norm(t.nombre).includes(f)));
       const cats = [...new Set(lista.map((t) => t.categoria))];
-      el.innerHTML = '<input type="search" id="filtroTrat" placeholder="Filtrar…" value="' + esc(S.filtro) + '">' +
+      const boton = (t) => '<button type="button" class="opcion" data-trat="' + t.id + '"><span>' + esc(t.nombre) + '</span><small>' +
+        precio(t) + '</small></button>';
+      // Los 6 que más se cobran en este navegador, para no buscarlos cada vez.
+      const usos = LS.get('usos', {});
+      const top = f ? [] : S.cat.tratamientos.filter((t) => usos['t' + t.id] && t.categoria !== 'cabina')
+        .sort((a, b) => usos['t' + b.id] - usos['t' + a.id]).slice(0, 6);
+      el.innerHTML = '<input type="search" id="filtroTrat" placeholder="Buscar tratamiento…" value="' + esc(S.filtro) + '">' +
+        (top.length ? '<h3>Más usados</h3><div class="grilla">' + top.map(boton).join('') + '</div>' : '') +
         cats.map((c) => '<h3>' + esc(c.replace('_', ' ')) + '</h3><div class="grilla">' +
-          lista.filter((t) => t.categoria === c).map((t) =>
-            '<button type="button" class="opcion" data-trat="' + t.id + '"><span>' + esc(t.nombre) + '</span><small>' +
-            precio(t) + '</small></button>').join('') + '</div>').join('');
+          lista.filter((t) => t.categoria === c).map(boton).join('') + '</div>').join('') +
+        (f && !lista.length ? '<p class="tenue">Ningún tratamiento con ese nombre.</p>' : '');
     } else if (S.tab === 'cabina') {
       const lista = S.cat.tratamientos.filter((t) => t.categoria === 'cabina');
       el.innerHTML = '<div class="grilla">' + lista.map((t) =>
@@ -571,9 +593,18 @@
         precio(t) + (t.pack_sesiones ? ' · ' + t.pack_sesiones + ' sesiones' : '') + '</small></button>').join('') + '</div>' +
         '<p class="tenue">Para usar una sesión de un pack ya comprado, elegí la paciente: aparece arriba.</p>';
     } else if (S.tab === 'productos') {
-      el.innerHTML = S.cat.productos.length ? '<div class="grilla">' + S.cat.productos.map((p) =>
-        '<button type="button" class="opcion" data-prod="' + p.id + '"><span>' + esc(p.nombre) + '</span><small>' +
-        (p.precio_venta == null ? 'sin precio' : plata(p.precio_venta)) + '</small></button>').join('') + '</div>'
+      const f = norm(S.filtroProd);
+      const lista = S.cat.productos.filter((p) => !f || f.split(/\s+/).every((w) => norm(p.nombre + ' ' + (p.laboratorio || '')).includes(w)));
+      // "Línea · Producto": se agrupa por la línea; si no tiene, por laboratorio.
+      const grupo = (p) => (p.nombre.includes(' · ') ? (p.laboratorio ? p.laboratorio + ' ' : '') + p.nombre.split(' · ')[0] : (p.laboratorio || 'Otros'));
+      const grupos = [...new Set(lista.map(grupo))];
+      el.innerHTML = S.cat.productos.length
+        ? '<input type="search" id="filtroProd" placeholder="Buscar producto o línea…" value="' + esc(S.filtroProd || '') + '">' +
+          (!f && lista.length > 24 ? '<p class="tenue">' + lista.length + ' productos. Escribí parte del nombre para encontrarlo rápido.</p>' : '') +
+          grupos.map((g) => '<h3>' + esc(g) + '</h3><div class="grilla">' + lista.filter((p) => grupo(p) === g).map((p) =>
+            '<button type="button" class="opcion" data-prod="' + p.id + '"><span>' + esc(p.nombre.includes(' · ') ? p.nombre.split(' · ').slice(1).join(' · ') : p.nombre) +
+            '</span><small>' + (p.precio_venta == null ? 'sin precio' : plata(p.precio_venta)) + '</small></button>').join('') + '</div>').join('') +
+          (f && !lista.length ? '<p class="tenue">Ningún producto con ese nombre.</p>' : '')
         : '<p class="tenue">No hay productos de reventa cargados.</p>';
     } else {
       renderDepilacion(el);
@@ -629,7 +660,9 @@
     id: v.id, client_id: v.client_id, fecha: v.fecha, estado: v.estado, medio: v.medio_pago,
     pacienteNombre: v.pacientes ? v.pacientes.nombre : v.paciente_ref,
     descripcion: v.venta_items.map((i) => i.descripcion).join(' + '),
-    total: v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0),
+    // En una deuda con pagos a cuenta, lo que falta (lo que se cobra ahora).
+    total: v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0) -
+           (v.estado === 'pendiente' ? (v.venta_pagos || []).reduce((a, p) => a + Number(p.monto), 0) : 0),
     pagos: v.venta_pagos || [], nota: v.nota,
   });
 
@@ -645,7 +678,7 @@
     const lista = cola.concat(srv).filter((v) => !operacionesSobre(v).length);
     el.hidden = !lista.length;
     if (!lista.length) return;
-    el.innerHTML = '<h2>Sin cobrar (' + lista.length + ')</h2>' + lista.map((v) => {
+    el.innerHTML = '<div class="titulo-fila"><h2>Sin cobrar (' + lista.length + ')</h2><a href="deudores.html">ver todos los deudores</a></div>' + lista.map((v) => {
       const key = v.id ? 'id:' + v.id : 'c:' + v.client_id;
       const abierto = S.cobrandoPendiente === key;
       if (abierto) ajustarPagos(S.pagosPendiente, C.r2(v.total));
@@ -746,7 +779,7 @@
     if (antes !== undefined && window.Cola.leer().length === antes) { renderSync(); return; }
     clearTimeout(refrescoPendiente);
     refrescoPendiente = setTimeout(async () => {
-      try { await Promise.all([cargarVentas(), cargarCatalogo()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
+      try { await Promise.all([cargarVentas(), cargarPacks()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
       render();
     }, 300);
   }
@@ -782,7 +815,13 @@
     if (d.sesion) { usarSesion(Number(d.sesion)); return; }
     if (d.tab) { S.tab = d.tab; renderCatalogo(); return; }
 
-    if (d.trat) { agregarItem({ tipo: 'tratamiento', tratamiento_id: Number(d.trat), profesional_id: profDefault() }); return; }
+    if (d.trat) {
+      const usos = LS.get('usos', {});
+      usos['t' + d.trat] = (usos['t' + d.trat] || 0) + 1;
+      LS.set('usos', usos);
+      agregarItem({ tipo: 'tratamiento', tratamiento_id: Number(d.trat), profesional_id: profDefault() });
+      return;
+    }
     if (d.cabina) {
       const tr = S.cat.tratamientos.find((x) => x.id === Number(d.cabina));
       agregarItem({ tipo: tr.pack_sesiones ? 'pack_venta' : 'cabina', tratamiento_id: tr.id });
@@ -899,10 +938,10 @@
       const f = $('#buscarDestino'); f.focus(); f.setSelectionRange(f.value.length, f.value.length);
       return;
     }
-    if (t.id === 'filtroTrat') {
-      S.filtro = t.value;
+    if (t.id === 'filtroTrat' || t.id === 'filtroProd') {
+      S[t.id === 'filtroTrat' ? 'filtro' : 'filtroProd'] = t.value;
       renderCatalogo();
-      const f = $('#filtroTrat'); f.focus(); f.setSelectionRange(f.value.length, f.value.length);
+      const f = $('#' + t.id); f.focus(); f.setSelectionRange(f.value.length, f.value.length);
       return;
     }
     if (t.id === 'nota') { S.nota = t.value; return; }
@@ -981,12 +1020,18 @@
     }, 60000);
 
     const { data: { session } } = await sb.auth.getSession();
+    const confirmar = async () => {
+      const u = await traerUsuario();
+      if (u) { LS.set('usuario', u); } else { LS.del('usuario'); }
+      return u;
+    };
     if (session && navigator.onLine) {
-      try {
-        const u = await traerUsuario();
-        if (u) { S.usuario = u; LS.set('usuario', u); }
-        else { S.usuario = null; LS.del('usuario'); }
-      } catch (e) { /* sin red: se usa el usuario guardado */ }
+      if (S.usuario) {
+        // Abre enseguida con el usuario guardado y lo confirma por detrás.
+        confirmar().then((u) => { if (!u || u.rol !== S.usuario.rol) location.reload(); }).catch(() => {});
+      } else {
+        try { S.usuario = await confirmar(); } catch (e) { /* sin red */ }
+      }
     }
     // Sin conexión se puede seguir cobrando con la sesión y el catálogo guardados.
     if (S.usuario && (session || !navigator.onLine) && (S.cat || navigator.onLine)) await arrancarCobro();

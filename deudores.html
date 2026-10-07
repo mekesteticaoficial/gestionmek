@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Deudores</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="preconnect" href="https://qemrmkwpsdiacaicedny.supabase.co">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <button id="sync" class="sync" type="button"></button>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card">
+      <div class="titulo-fila">
+        <h2>Deudores</h2>
+        <div class="fila">
+          <input type="search" id="buscar" placeholder="Buscar paciente…" style="max-width:240px">
+          <button type="button" class="primario" id="nuevaDeuda">+ Cargar deuda</button>
+        </div>
+      </div>
+      <p class="explica">Lo que deben las pacientes: atenciones que se guardaron "sin cobrar" y deudas cargadas a mano. Si alguien entrega una parte, tocá <b>Entregó una parte</b>: se descuenta de lo más viejo y el resto sigue acá.</p>
+      <div id="resumen" class="kpis"></div>
+    </section>
+    <div id="lista"></div>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/cola.js"></script>
+  <script src="js/deudores.js"></script>
+</body>
+</html>

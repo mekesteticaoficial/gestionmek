@@ -101,7 +101,7 @@
         return '<tr><td>' + M.esc(z.nombre) + '</td><td>' + z.sexo + '</td><td class="num">' + P(z.precio) + '</td><td>' +
           (fut ? P(fut.precio) + ' desde ' + M.fechaCorta(fut.vigente_desde) : '') + '</td><td><button type="button" class="link" data-zona="' + z.id + '">nuevo precio</button></td></tr>';
       }).join('') + '</tbody></table></div></div>' +
-      '<div><h2>Promos</h2><p class="explica">Cualquier combinación que no sea una promo se cotiza con la escala (1ª zona 100%, 2ª 40%, 3ª 30%, después 25%), sin piso ni redondeo.</p>' +
+      '<div><h2>Promos</h2><p class="explica">Cualquier combinación que no sea una promo se cotiza con la escala (1ª zona 100%, 2ª 40%, 3ª 30%, después 25%), sin piso, redondeada hacia arriba al millar.</p>' +
       '<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Promo</th><th class="num">Precio</th><th class="num">Por escala</th><th></th></tr></thead><tbody>' +
       cat.promos.map((p) => {
         const ids = cat.promoZonas.filter((x) => x.promo_id === p.id).map((x) => (C.zonaVigente(cat, x.zona_id, hoy) || {}).id).filter(Boolean);
@@ -145,7 +145,7 @@
       '<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Producto</th><th>Tipo</th><th class="num">Precio venta</th><th class="num">Unid. por compra</th>' +
       '<th class="num">Rinde sesiones</th><th class="num">Costo prom.</th><th></th></tr></thead><tbody>' +
       cat.productos.map((p) => '<tr class="' + (p.activo ? '' : 'anulado') + '"><td>' + M.esc(p.nombre) + '<div class="tenue">' + M.esc(p.laboratorio || '') +
-        (p.unidad_compra ? ' · ' + M.esc(p.unidad_compra) : '') + (p.modalidad === 'consignacion' ? ' · consignación ' + (p.margen_consignacion != null ? p.margen_consignacion + '% para MEK' : '(margen sin dato)') : '') +
+        (p.unidad_compra ? ' · ' + M.esc(p.unidad_compra) : '') + (p.modalidad === 'consignacion' ? ' · consignación de ' + M.esc(p.consignante || '¿quién?') + ', ' + (p.margen_consignacion != null ? p.margen_consignacion + '% para MEK' : 'margen sin dato') : '') +
         '</div></td><td>' + M.esc(p.tipo) + '</td><td class="num">' + P(p.precio_venta) + '</td><td class="num">' + (p.fracciones_por_unidad ?? '<i>sin dato</i>') +
         '</td><td class="num">' + (p.rinde_sesiones ?? '—') + '</td><td class="num">' + P(p.costo_promedio) + '</td><td><button type="button" class="link" data-prod="' + p.id + '">editar</button></td></tr>').join('') +
       '</tbody></table></div>';
@@ -283,6 +283,7 @@
       { id: 'tipo', label: 'Tipo', type: 'select', value: p.tipo, options: [['reventa', 'Reventa (se vende)'], ['insumo_cabina', 'Insumo de cabina'], ['descartable', 'Descartable']] },
       { id: 'modalidad', label: 'Modalidad', type: 'select', value: p.modalidad, options: [['propio', 'Propio (lo compra MEK)'], ['consignacion', 'En consignación']] },
       { id: 'margen', label: 'Margen para MEK % (consignación)', type: 'number', value: p.margen_consignacion },
+      { id: 'consignante', label: 'Quién lo trajo (consignación)', value: p.consignante, ayuda: 'Para saber a quién se le debe lo vendido (Acreedores).' },
       { id: 'unidad', label: 'Unidad de compra', value: p.unidad_compra, ayuda: 'pote 320g, bidón 1kg, unidad…' },
       { id: 'fracciones', label: 'Unidades de venta por unidad de compra', type: 'number', value: p.fracciones_por_unidad, ayuda: 'Vacío = no se sabe (nunca se asume 1).' },
       { id: 'rinde', label: 'Rinde sesiones (insumos)', type: 'number', value: p.rinde_sesiones },
@@ -293,7 +294,8 @@
     if (!v || !v.nombre) return;
     if (v.fracciones != null && v.fracciones <= 0) { M.toast('Las unidades por compra tienen que ser más que cero', 'error'); return; }
     const fila = { nombre: v.nombre.trim(), laboratorio: v.laboratorio, tipo: v.tipo, modalidad: v.modalidad,
-                   margen_consignacion: v.modalidad === 'consignacion' ? v.margen : null, unidad_compra: v.unidad,
+                   margen_consignacion: v.modalidad === 'consignacion' ? v.margen : null,
+                   consignante: v.modalidad === 'consignacion' ? (v.consignante || '').trim() || null : null, unidad_compra: v.unidad,
                    fracciones_por_unidad: v.fracciones, rinde_sesiones: v.rinde, precio_venta: v.precio, codigo_barras: v.barras,
                    activo: v.activo === 'si' };
     await escribir(id ? sb.from('productos').update(fila).eq('id', id) : sb.from('productos').insert(fila), 'Producto guardado');

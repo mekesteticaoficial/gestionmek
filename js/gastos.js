@@ -6,7 +6,7 @@
   const sb = M.sb;
   const $ = (s) => document.querySelector(s);
   const TIPOS = { costo_operativo: 'Costo del negocio', retiro_socio: 'Retiro de socio', sueldo: 'Sueldo',
-                  pago_tercero: 'Pago a tercero', compra_producto: 'Compra de mercadería' };
+                  pago_tercero: 'Pago a tercero', compra_producto: 'Compra de mercadería', pago_deuda: 'Pago de deuda' };
   const CATEGORIAS = ['alquiler', 'luz', 'gas', 'agua', 'internet', 'teléfono', 'limpieza', 'insumos varios',
                       'publicidad', 'mantenimiento', 'impuestos', 'contador', 'banco y comisiones', 'otros'];
   let usuario = null, medio = null, gastos = [];

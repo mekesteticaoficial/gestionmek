@@ -12,7 +12,7 @@
     cabina: 'Cabina suelta', consulta: 'Consultas',
   };
   const TIPOS = { costo_operativo: 'Costos del negocio', sueldo: 'Sueldos', pago_tercero: 'Pagos a terceros',
-                  compra_producto: 'Compras de mercadería', retiro_socio: 'Retiros de socio' };
+                  compra_producto: 'Compras de mercadería', pago_deuda: 'Pagos de deudas y préstamos', retiro_socio: 'Retiros de socio' };
 
   const f = (d) => d.toLocaleDateString('en-CA');
   function rango(p) {
@@ -25,8 +25,19 @@
   }
 
   async function ver() {
-    const { data, error } = await sb.rpc('panel', { p_desde: $('#desde').value, p_hasta: $('#hasta').value });
+    const rango = { p_desde: $('#desde').value, p_hasta: $('#hasta').value };
+    const [{ data, error }, caja] = await Promise.all([sb.rpc('panel', rango), sb.rpc('panel_caja', rango)]);
     if (error) { M.toast(M.mensaje(error), 'error'); return; }
+    // La caja cuenta la plata el día que entró (pagos a cuenta incluidos) y
+    // los préstamos que entraron. Si 06 no está corrida, queda la de panel().
+    if (!caja.error && caja.data) {
+      const c = caja.data;
+      data.medios = c.medios;
+      data.caja.entradas = M.r2(Number(c.cobros) + Number(c.prestamos));
+      data.caja.movimiento = M.r2(data.caja.entradas - Number(data.caja.salidas));
+      data.caja.a_cuenta = c.a_cuenta;
+      data.caja.prestamos = c.prestamos;
+    }
     render(data);
   }
 
@@ -38,7 +49,7 @@
     const alertas = [];
     if (d.sin_regla) alertas.push('<a href="catalogo.html#comisiones">' + d.sin_regla + ' cobro(s) sin regla de comisión</a>');
     if (d.promos_revisar) alertas.push('<a href="catalogo.html#depilacion">' + d.promos_revisar + ' promo(s) de depilación para revisar</a>');
-    if (d.pendientes_cobro.ventas) alertas.push(d.pendientes_cobro.ventas + ' atención(es) sin cobrar por ' + P(d.pendientes_cobro.monto) + ' (se ven en rojo en Cobro)');
+    if (d.pendientes_cobro.ventas) alertas.push('<a href="deudores.html">' + d.pendientes_cobro.ventas + ' atención(es) sin cobrar por ' + P(d.pendientes_cobro.monto) + '</a>');
     const vencidas = d.compras_a_pagar.filter((x) => x.vencimiento && x.vencimiento < M.hoy());
     if (vencidas.length) alertas.push('<a href="compras.html">' + vencidas.length + ' compra(s) vencida(s) sin pagar</a>');
     $('#alertas').innerHTML = alertas.length ? '<div class="alerta">⚠ ' + alertas.join(' · ') + '</div>' : '';
@@ -72,7 +83,9 @@
 
       '<section class="card"><h2>Caja por medio de pago</h2><div class="tabla-wrap"><table class="tabla"><tbody>' +
         (d.medios.length ? d.medios.map((m) => '<tr><td>' + M.esc(M.nombreMedio(m.medio)) + '</td><td class="num">' + P(m.monto) + '</td></tr>').join('') +
+          (Number(c.prestamos) ? '<tr><td>Préstamos que entraron</td><td class="num">' + P(c.prestamos) + '</td></tr>' : '') +
           '<tr class="total"><td>Total</td><td class="num">' + P(c.entradas) + '</td></tr>' : '<tr><td class="tenue">Sin pagos.</td></tr>') +
+        (Number(c.a_cuenta) ? '<tr><td colspan="2" class="tenue">Incluye ' + P(c.a_cuenta) + ' de pagos a cuenta de deudoras.</td></tr>' : '') +
         '</tbody></table></div>' +
         '<h2 style="margin-top:16px">Por profesional</h2><div class="tabla-wrap"><table class="tabla"><thead><tr><th>Profesional</th><th class="num">Atenc.</th>' +
         '<th class="num">Cobrado</th><th class="num">Comisión / su parte</th></tr></thead><tbody>' +

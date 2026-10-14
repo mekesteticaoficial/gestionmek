@@ -6,6 +6,9 @@
   const sb = M.sb;
   const $ = (s) => document.querySelector(s);
   let profs = [], preview = null, ajustesManuales = [], liquidaciones = [];
+  let desdeTocado = false;          // si Franco cambió "Desde", no se pisa
+  let hoyDatos = [];                // vista previa al día de hoy, por profesional
+  let adelanto = null;              // {prof, monto, medio, fecha, cid}
 
   // Sábado más reciente (la semana de Yael cierra el sábado).
   function ultimoSabado() {
@@ -29,7 +32,66 @@
     if (error) { M.toast(M.mensaje(error), 'error'); return; }
     preview = data;
     ajustesManuales = [];
+    if (!desdeTocado || !$('#desde').value) $('#desde').value = data.desde_sugerido || $('#hasta').value;
     renderPreview();
+  }
+
+  // ------------------------------------------------------------ al día de hoy
+  async function cargarHoy() {
+    const res = await Promise.all(profs.map((p) => sb.rpc('preview_liquidacion', { p_prof: p.id, p_hasta: M.hoy() })));
+    hoyDatos = res.map((r, i) => (r.error ? null : Object.assign(r.data, { id: profs[i].id }))).filter(Boolean);
+    renderHoy();
+  }
+
+  function renderHoy() {
+    const con = hoyDatos.filter((d) => d.items.length || d.ajustes.length);
+    $('#hoy').innerHTML = con.length ? con.map((d) => {
+      const neto = M.r2(Number(d.total) + Number(d.total_ajustes));
+      const adel = d.ajustes.filter((a) => a.origen === 'adelanto');
+      const sumAdel = M.r2(adel.reduce((a, x) => a + Number(x.monto), 0));
+      const otros = M.r2(Number(d.total_ajustes) - sumAdel);
+      return '<div class="kpi destacado"><small>' + M.esc(d.profesional) + (d.modelo === 'interno' ? '' : ' (tercero)') + ' · se le debe hoy</small>' +
+        '<b>' + M.plata(neto) + '</b><div class="det">' + M.plata(d.total) + ' de ' + d.items.length + ' atención(es)' +
+        (d.ultima_hasta ? ' desde el ' + M.fechaCorta(d.desde_sugerido) : '') +
+        (adel.length ? '<br>− ' + M.plata(-sumAdel) + ' adelantado (' + adel.length + ')' : '') +
+        (otros ? '<br>' + (otros < 0 ? '− ' : '+ ') + M.plata(Math.abs(otros)) + ' de ajustes' : '') +
+        (d.sin_regla.length ? '<br><span class="error">' + d.sin_regla.length + ' sin regla de comisión</span>' : '') +
+        (d.pendientes_cobro.length ? '<br>' + d.pendientes_cobro.length + ' atención(es) sin cobrar, todavía no suman' : '') + '</div>' +
+        '<div class="fila" style="margin-top:8px"><button type="button" class="primario" data-adelantar="' + d.id + '">Registrar adelanto</button>' +
+        '<button type="button" class="link" data-verprof="' + d.id + '">ver detalle</button></div></div>';
+    }).join('') : '<p class="tenue">Nadie tiene nada pendiente de liquidar.</p>';
+    renderAdelanto();
+  }
+
+  function renderAdelanto() {
+    const el = $('#adelanto');
+    if (!adelanto) { el.innerHTML = ''; return; }
+    const d = hoyDatos.find((x) => x.id === adelanto.prof);
+    const neto = d ? M.r2(Number(d.total) + Number(d.total_ajustes)) : 0;
+    el.innerHTML = '<div class="pend" style="margin-top:12px"><b>Adelanto a ' + M.esc(d ? d.profesional : '') + '</b>' +
+      '<div class="tenue">Hoy se le debe ' + M.plata(neto) + '. Lo que le adelantes se descuenta solo al cerrar la semana.</div>' +
+      '<div class="form" style="margin-top:8px"><label>Monto $ <input type="number" id="adMonto" min="0" step="0.01" inputmode="decimal" value="' + M.esc(adelanto.monto) + '"></label>' +
+      '<label>Fecha <input type="date" id="adFecha" value="' + M.esc(adelanto.fecha) + '"></label></div>' +
+      '<div class="medios" style="margin-top:8px">' + M.MEDIOS.map(([k, n]) => '<button type="button" class="medio' + (adelanto.medio === k ? ' activo' : '') +
+        '" data-admedio="' + k + '">' + n + '</button>').join('') + '</div>' +
+      (Number(adelanto.monto) > neto && neto >= 0 ? '<div class="aviso">Es más de lo que se le debe hoy: la diferencia se le descuenta de lo que gane después.</div>' : '') +
+      '<div class="acciones fila"><button type="button" class="primario" id="adGuardar">Registrar adelanto</button>' +
+      (neto > 0 ? '<button type="button" class="link" id="adTodo">todo lo de hoy (' + M.plata(neto) + ')</button>' : '') +
+      '<button type="button" class="link" id="adCancelar">cancelar</button></div></div>';
+  }
+
+  async function guardarAdelanto() {
+    const monto = M.numero(adelanto.monto);
+    if (!(monto > 0)) { M.toast('Falta el monto', 'error'); return; }
+    if (!adelanto.medio) { M.toast('Elegí el medio de pago', 'error'); return; }
+    adelanto.cid = adelanto.cid || window.Cola.uuid();   // mismo id si se reintenta: no duplica
+    const { error } = await sb.rpc('registrar_adelanto', { p_prof: adelanto.prof, p_monto: monto, p_fecha: adelanto.fecha,
+      p_medio: adelanto.medio, p_client_id: adelanto.cid });
+    if (error) { M.toast(M.mensaje(error), 'error'); return; }
+    M.toast('Adelanto de ' + M.plata(monto) + ' registrado', 'ok');
+    adelanto = null;
+    await cargarHoy();
+    if (preview) ver();
   }
 
   function renderPreview() {
@@ -39,7 +101,6 @@
     const queCobra = p.modelo === 'interno' ? 'Comisión' : 'Le corresponde';
     const manual = ajustesManuales.reduce((a, x) => a + (M.numero(x.monto) || 0), 0);
     const neto = M.r2(Number(p.total) + Number(p.total_ajustes) + manual);
-    const desde = p.desde_sugerido || $('#hasta').value;
     const bloqueado = p.sin_regla.length > 0;
 
     el.innerHTML =
@@ -67,7 +128,6 @@
       '</tbody></table></div>' +
       (neto < 0 ? '<p class="aviso">El saldo da negativo: no se paga nada y la diferencia se descuenta en la próxima.</p>' : '') +
       '<div class="form" style="margin-top:12px">' +
-        '<label>Desde <input type="date" id="desde" value="' + M.esc(desde) + '"></label>' +
         '<label class="ancho">Nota <input id="nota" placeholder="Opcional"></label>' +
         '<div><button type="button" class="primario" id="cerrar"' + (bloqueado ? ' disabled' : '') + '>Cerrar liquidación</button></div>' +
       '</div>';
@@ -87,7 +147,9 @@
     if (error) { M.toast(M.mensaje(error), 'error'); return; }
     M.toast('Liquidación ' + data + ' cerrada', 'ok');
     preview = null;
+    desdeTocado = false;
     renderPreview();
+    cargarHoy();
     await cargarHistorial();
     verDetalle(data);
   }
@@ -168,6 +230,7 @@
     if (error) { M.toast(M.mensaje(error), 'error'); return; }
     M.toast('Pagada. Queda registrada como gasto.', 'ok');
     cargarHistorial();
+    cargarHoy();
   }
 
   async function resolver() {
@@ -187,13 +250,30 @@
     if (t.id === 'agregarAjuste') { ajustesManuales.push({ monto: '', motivo: '' }); renderPreview(); }
     if (d.ajsacar) { ajustesManuales.splice(Number(d.ajsacar), 1); renderPreview(); }
     if (d.detalle) verDetalle(Number(d.detalle));
+    if (d.adelantar) { adelanto = { prof: Number(d.adelantar), monto: '', medio: null, fecha: M.hoy(), cid: null }; renderAdelanto(); $('#adMonto').focus(); }
+    if (d.admedio) { adelanto.medio = d.admedio; renderAdelanto(); }
+    if (t.id === 'adGuardar') guardarAdelanto();
+    if (t.id === 'adCancelar') { adelanto = null; renderAdelanto(); }
+    if (t.id === 'adTodo') {
+      const x = hoyDatos.find((y) => y.id === adelanto.prof);
+      adelanto.monto = M.r2(Number(x.total) + Number(x.total_ajustes)); adelanto.cid = null; renderAdelanto();
+    }
+    if (t.id === 'refrescarHoy') cargarHoy();
+    if (d.verprof) {
+      $('#prof').value = d.verprof; desdeTocado = false; $('#hasta').value = M.hoy();
+      ver().then(() => $('#preview').scrollIntoView({ behavior: 'smooth' }));
+    }
     if (d.pagar) pagar(Number(d.pagar));
   });
   document.addEventListener('change', (ev) => {
     const d = ev.target.dataset;
     if (d.ajmonto !== undefined) { ajustesManuales[Number(d.ajmonto)].monto = ev.target.value; renderPreview(); }
     if (d.ajmotivo !== undefined) { ajustesManuales[Number(d.ajmotivo)].motivo = ev.target.value; }
-    if (ev.target.id === 'prof' || ev.target.id === 'hasta') { preview = null; renderPreview(); }
+    if (ev.target.id === 'prof') { desdeTocado = false; preview = null; renderPreview(); }
+    if (ev.target.id === 'hasta') { preview = null; renderPreview(); }
+    if (ev.target.id === 'desde') desdeTocado = true;
+    if (ev.target.id === 'adMonto') { adelanto.monto = ev.target.value; adelanto.cid = null; renderAdelanto(); }
+    if (ev.target.id === 'adFecha') adelanto.fecha = ev.target.value;
   });
 
   async function iniciar() {
@@ -202,6 +282,7 @@
     M.salirBoton();
     $('#hasta').value = ultimoSabado();
     try { await cargarProfs(); } catch (e) { M.toast(M.mensaje(e), 'error'); return; }
+    cargarHoy();
     cargarHistorial();
   }
   iniciar();

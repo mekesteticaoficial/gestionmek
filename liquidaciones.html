@@ -18,11 +18,19 @@
 
   <main class="pagina">
     <section class="card">
+      <div class="titulo-fila"><h2>Al día de hoy</h2><button type="button" class="link" id="refrescarHoy">actualizar</button></div>
+      <p class="explica">Lo que se le debe a cada una en este momento: lo que ganó y todavía no se liquidó, menos lo que ya se le adelantó. Se actualiza con cada cobro.</p>
+      <div id="hoy" class="kpis"></div>
+      <div id="adelanto"></div>
+    </section>
+
+    <section class="card">
       <h2>Liquidar</h2>
-      <p class="explica">Entra todo lo <b>cobrado</b> hasta la fecha de corte que todavía no se liquidó, incluso de días anteriores que se cobraron tarde.
+      <p class="explica">Entra todo lo <b>cobrado</b> hasta la fecha de corte que todavía no se liquidó, incluso de días anteriores que se cobraron tarde, y se descuentan los adelantos.
         Una vez cerrada, la liquidación no cambia: si después se anula algo, se descuenta en la siguiente.</p>
       <div class="form">
         <label>Profesional <select id="prof"></select></label>
+        <label>Desde <input type="date" id="desde"></label>
         <label>Hasta (fecha de corte) <input type="date" id="hasta"></label>
         <div><button type="button" class="primario" id="ver">Ver qué entra</button></div>
       </div>
@@ -40,6 +48,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script src="js/config.js"></script>
   <script src="js/comun.js"></script>
+  <script src="js/cola.js"></script>
   <script src="js/liquidaciones.js"></script>
 </body>
 </html>

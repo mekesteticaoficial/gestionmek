@@ -234,3 +234,43 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: .92rem; }
 }
 .packs > div { display: flex; flex-direction: column; align-items: flex-start; }
 .packs > div > .pack { width: 100%; }
+
+/* ---------------------------------------------------------------- gráficos (una serie, color de marca) */
+.grafico { width: 100%; height: auto; display: block; overflow: visible; }
+.grafico .barra { fill: var(--marca); }
+.grafico .barra.futura { fill: var(--borde); }
+.grafico .dia:hover .barra, .grafico .dia:focus .barra { fill: #5d2240; }
+.grafico .dia:focus { outline: none; }
+.grafico .base { stroke: var(--borde); stroke-width: 1; }
+.grafico .valor { font-size: 11px; fill: var(--texto); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.grafico .eje { font-size: 11px; fill: var(--tenue); text-anchor: middle; }
+.grafico .eje.hoy { fill: var(--texto); font-weight: 700; }
+.hbarras { display: flex; flex-direction: column; gap: 8px; }
+.hfila { display: grid; grid-template-columns: minmax(90px, 30%) 1fr auto; gap: 8px; align-items: center; font-size: .9rem; }
+.hnombre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hpista { background: var(--fondo); border-radius: 4px; height: 10px; }
+.hbarra { background: var(--marca); height: 10px; border-radius: 0 4px 4px 0; }
+.hvalor { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hvalor small { display: block; color: var(--tenue); font-size: .75rem; }
+.chip:disabled { opacity: .4; }
+
+/* ---------------------------------------------------------------- cabinas */
+.packs-grilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.pack-card.terminado { opacity: .65; }
+.puntos { display: flex; gap: 6px; margin: 10px 0 6px; }
+.punto { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--marca); background: #fff; }
+.punto.usada { background: var(--marca); }
+@media (max-width: 860px) {
+  .nav { flex-wrap: wrap; overflow: visible; gap: 4px; }
+  .nav a { padding: 5px 8px; font-size: .9rem; }
+}
+@media (max-width: 860px) {
+  /* En el celular el menú ocupa dos renglones: que se vaya con el scroll. */
+  .barra { position: static; }
+}
+
+/* Turnos atendidos en el dashboard (no es una deuda: color de la marca) */
+.bandeja.turnos { border-color: var(--marca); background: var(--marca-suave); }
+.bandeja.turnos h2 { color: var(--marca); }
+.turno-ticket { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 10px;
+  margin-bottom: 10px; border-radius: 8px; background: var(--marca-suave); border: 1px solid var(--marca); font-size: .92rem; }

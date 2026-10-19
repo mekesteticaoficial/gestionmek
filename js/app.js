@@ -47,6 +47,10 @@
     depi: { sexo: 'mujer', zonas: [] },
     cobrandoPendiente: null,   // id de venta de la bandeja que se está cobrando
     pagosPendiente: [{ medio: null, monto: null }],
+    // Turnos marcados "✓ Atendida" en el dashboard (js/turnos.js).
+    turnos: LS.get('turnos', { fecha: null, lista: [], cobrados: [] }),
+    turnosError: null,
+    turno: null,               // el turno que se está cobrando en el ticket
   };
 
   // ------------------------------------------------------------------
@@ -128,7 +132,7 @@
   }
 
   async function cargarVentas() {
-    const sel = 'id,fecha,paciente_ref,estado,medio_pago,nota,creado_por,client_id,' +
+    const sel = 'id,fecha,paciente_ref,estado,medio_pago,nota,creado_por,client_id,a_deudores_en,' +
                 'pacientes(nombre),venta_items(tipo,descripcion,precio_cobrado),venta_pagos(medio,monto)';
     const [h, p, s] = await Promise.all([
       sb.from('ventas').select(sel).eq('fecha', S.fecha).order('id', { ascending: false }),
@@ -146,11 +150,36 @@
     LS.set('pendientes', S.pendientes);
   }
 
+  // Turnos atendidos del día elegido. Firebase solo se lee (GET).
+  async function cargarTurnos() {
+    if (!navigator.onLine) return;
+    const fecha = S.fecha;
+    try {
+      const lista = (await window.Turnos.leerDia(fecha)).filter((t) => t.atendido);
+      if (fecha !== S.fecha) return;
+      S.turnos = { fecha, lista, cobrados: S.turnos.fecha === fecha ? S.turnos.cobrados : [] };
+      S.turnosError = null;
+      await marcarCobrados();
+    } catch (e) {
+      S.turnosError = 'No se pudieron leer los turnos del dashboard (' + (e.message || e) + ').';
+    }
+  }
+
+  // Qué turnos ya tienen una venta (no anulada) en la base.
+  async function marcarCobrados() {
+    const refs = S.turnos.lista.map((t) => t.ref);
+    if (!refs.length || !navigator.onLine) { LS.set('turnos', S.turnos); return; }
+    const { data, error } = await sb.from('ventas').select('turno_ref').in('turno_ref', refs).neq('estado', 'anulada');
+    if (error) throw error;
+    S.turnos.cobrados = data.map((v) => v.turno_ref);
+    LS.set('turnos', S.turnos);
+  }
+
   async function refrescar() {
     if (!navigator.onLine) { render(); return; }
     try {
       await window.Cola.procesar(sb);
-      await Promise.all([cargarCatalogo(), cargarVentas()]);
+      await Promise.all([cargarCatalogo(), cargarVentas(), cargarTurnos()]);
     } catch (e) {
       toast('No se pudo actualizar: ' + (e.message || e), 'error');
     }
@@ -226,6 +255,7 @@
     }
     render();
     sincronizarPacientes(false).then(render);
+    cargarTurnos().then(render);
     window.Cola.procesar(sb).then(refrescarSiCambio);
   }
 
@@ -233,6 +263,7 @@
   // Ticket
   // ------------------------------------------------------------------
   function profDefault() {
+    if (S.turno && S.turno.profesional_id) return S.turno.profesional_id;
     return (S.usuario && S.usuario.profesional_id) || LS.get('ultimoProf', null);
   }
 
@@ -352,10 +383,20 @@
     return null;
   }
 
+  function htmlTurnoTicket() {
+    const t = S.turno;
+    if (!t) return '';
+    return '<div class="turno-ticket"><div><b>Turno del dashboard</b> · ' + horaTurno(t.hora) + ' · ' + esc(t.nom) +
+      ' · ' + esc(t.tr || 'sin tratamiento') + (t.profNombre ? ' · ' + esc(t.profNombre) : '') +
+      (t.obs ? '<div class="tenue">Nota del turno: ' + esc(t.obs) + '</div>' : '') +
+      (t.aviso ? '<div class="aviso">' + esc(t.aviso) + '</div>' : '') +
+      '</div><button type="button" class="link" data-soltarturno>no es de este turno</button></div>';
+  }
+
   function renderTicket() {
     const el = $('#ticket');
     if (!S.items.length) {
-      el.innerHTML = '<p class="tenue">Elegí lo que se hizo en el paso 2.</p>';
+      el.innerHTML = htmlTurnoTicket() + '<p class="tenue">Elegí lo que se hizo en el paso 2.</p>';
       renderBarraMovil(0);
       return;
     }
@@ -365,7 +406,7 @@
     const errPago = validarPagos(S.pagos, total);
     const faltaPaciente = !S.paciente;
 
-    el.innerHTML = filas.map(htmlItem).join('') +
+    el.innerHTML = htmlTurnoTicket() + filas.map(htmlItem).join('') +
       '<div class="total"><span>Total</span><b>' + plata(total) + '</b></div>' +
       (total > 0 ? '<div class="pagos">' + htmlPagos(S.pagos, total, 't') + '</div>' : '') +
       '<label class="nota">Nota <input type="text" id="nota" value="' + esc(S.nota) + '" placeholder="Opcional"></label>' +
@@ -393,6 +434,7 @@
     S.pagos = [{ medio: null, monto: null }];
     S.nota = '';
     S.paciente = null;
+    S.turno = null;
     $('#buscarPaciente').value = '';
   }
 
@@ -414,6 +456,8 @@
       paciente: { ref: p.ref, nombre: p.nombre, telefono: p.telefono, email: p.email },
       estado, pagos: estado === 'cobrada' ? pagos.filter((x) => Number(x.monto) > 0) : [],
       nota: S.nota || null, items,
+      // Turno del dashboard que se cobra: así no vuelve a aparecer.
+      turno_ref: S.turno ? S.turno.ref : null,
     };
   }
 
@@ -460,6 +504,7 @@
     if (r.errores.length) { toast(r.errores.join(' · '), 'error'); return; }
     const venta = nuevaVenta('cobrada', [item], []);
     const op = window.Cola.agregar('venta', venta);
+    S.turno = null;   // si venía de un turno, la sesión del pack lo cierra
     pk.disponibles--;
     LS.set('catalogo', S.cat);
     render();
@@ -663,18 +708,19 @@
     // En una deuda con pagos a cuenta, lo que falta (lo que se cobra ahora).
     total: v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0) -
            (v.estado === 'pendiente' ? (v.venta_pagos || []).reduce((a, p) => a + Number(p.monto), 0) : 0),
-    pagos: v.venta_pagos || [], nota: v.nota,
+    pagos: v.venta_pagos || [], nota: v.nota, a_deudores: !!v.a_deudores_en,
   });
 
   function operacionesSobre(v) {
-    return window.Cola.leer().filter((o) => (o.tipo === 'cobrar' || o.tipo === 'anular') &&
+    return window.Cola.leer().filter((o) => (o.tipo === 'cobrar' || o.tipo === 'anular' || o.tipo === 'a_deudores') &&
       ((v.id && o.payload.venta_id === v.id) || (v.client_id && o.payload.client_id === v.client_id)));
   }
 
   function renderBandeja() {
     const el = $('#bandeja');
     const cola = ventasEnCola().filter((v) => v.estado === 'pendiente');
-    const srv = S.pendientes.map(deServidor).filter((v) => !cola.some((c) => c.client_id === v.client_id));
+    // Las que se pasaron a deudores no molestan acá: siguen en Deudores.
+    const srv = S.pendientes.map(deServidor).filter((v) => !v.a_deudores && !cola.some((c) => c.client_id === v.client_id));
     const lista = cola.concat(srv).filter((v) => !operacionesSobre(v).length);
     el.hidden = !lista.length;
     if (!lista.length) return;
@@ -691,9 +737,81 @@
             '<div class="acciones fila"><button type="button" class="primario" data-cobrarpend="' + key + '">Cobrar ' +
             plata(v.total) + '</button><button type="button" class="link" data-cerrarpend>cancelar</button></div>'
           : '<div class="acciones fila"><button type="button" class="primario" data-abrirpend="' + key + '">Cobrar</button>' +
+            '<button type="button" class="secundario" style="width:auto" data-adeudores="' + key + '">Pasar a deudores</button>' +
             '<button type="button" class="link" data-anular="' + key + '">anular</button></div>') +
         '</div>';
     }).join('');
+  }
+
+  // ------------------------------------------------------------------
+  // Turnos atendidos en el dashboard que todavía no se cobraron
+  // ------------------------------------------------------------------
+  const horaTurno = (h) => (Number.isFinite(h) ? String(Math.floor(h)).padStart(2, '0') + ':' + (h % 1 ? '30' : '00') : '—');
+
+  function turnosSinCobrar() {
+    if (S.turnos.fecha !== S.fecha) return [];
+    const enCola = new Set(window.Cola.leer().filter((o) => o.tipo === 'venta' && o.payload.turno_ref).map((o) => o.payload.turno_ref));
+    const cobrados = new Set(S.turnos.cobrados);
+    return S.turnos.lista.filter((t) => !cobrados.has(t.ref) && !enCola.has(t.ref));
+  }
+
+  function renderTurnos() {
+    const el = $('#turnos');
+    const lista = turnosSinCobrar();
+    el.hidden = !lista.length && !S.turnosError;
+    if (el.hidden) return;
+    const profs = S.cat ? S.cat.profesionales : [];
+    el.innerHTML = '<div class="titulo-fila"><h2>Atendidas en el dashboard, sin cobrar (' + lista.length + ')</h2>' +
+      '<button type="button" class="link" id="recargarTurnos">actualizar</button></div>' +
+      (S.turnosError ? '<p class="error">' + esc(S.turnosError) + '</p>' : '') +
+      lista.map((t) => {
+        const p = window.Turnos.profesional(t.prof, profs);
+        const actual = S.turno && S.turno.ref === t.ref;
+        return '<div class="pend"><div class="pend-top"><div><b>' + esc(t.nom || '(sin nombre)') + '</b> · ' + esc(t.tr || '—') +
+          '<div class="tenue">' + horaTurno(t.hora) + (p ? ' · ' + esc(p.nombre) : '') + (t.obs ? ' · ' + esc(t.obs) : '') + '</div></div>' +
+          (actual ? '<span class="tenue">en el ticket</span>'
+                  : '<button type="button" class="primario" data-turno="' + esc(t.ref) + '">Cobrar</button>') +
+          '</div></div>';
+      }).join('');
+  }
+
+  // Un toque: arma el ticket con lo que dice el turno. Lo que no se puede
+  // saber con seguridad (zonas de depilación, cuál "Facial") lo elige
+  // quien cobra; nunca se inventa un precio.
+  function usarTurno(ref) {
+    const t = S.turnos.lista.find((x) => x.ref === ref);
+    if (!t || !S.cat) return;
+    if (S.items.length && !confirm('El ticket tiene cosas cargadas. ¿Reemplazarlas por el turno de ' + t.nom + '?')) return;
+    S.items = [];
+    S.pagos = [{ medio: null, monto: null }];
+    S.nota = '';
+    S.transfiriendo = null;
+    const prof = window.Turnos.profesional(t.prof, S.cat.profesionales);
+    S.turno = Object.assign({}, t, { profesional_id: prof ? prof.id : null, profNombre: prof ? prof.nombre : null, aviso: null });
+
+    const m = window.Turnos.paciente(t, S.pacientes);
+    S.paciente = m.paciente || null;
+    $('#buscarPaciente').value = m.paciente ? '' : t.nom;
+    if (S.paciente) cargarHistorial(S.paciente.ref);
+
+    const trat = window.Turnos.tratamiento(t, S.cat.tratamientos);
+    const avisos = [];
+    if (!m.paciente) avisos.push(m.opciones.length ? 'Hay ' + m.opciones.length + ' pacientes con ese nombre: elegí cuál en el paso 1.'
+                                                  : 'No se encontró la paciente por el nombre: buscala en el paso 1.');
+    if (!prof && t.prof !== 'otro') avisos.push('No se reconoció la profesional del turno: elegila en el ticket.');
+    if (trat) {
+      agregarItem({ tipo: 'tratamiento', tratamiento_id: trat.id, profesional_id: profDefault() });
+    } else if (window.Turnos.esDepilacion(t)) {
+      S.tab = 'depilacion';
+      avisos.push('Marcá las zonas de depilación en el paso 2.');
+    } else {
+      S.tab = 'tratamientos';
+      S.filtro = '';
+      avisos.push('"' + (t.tr || 'sin tratamiento') + '" no está con ese nombre en la lista de precios: elegí el tratamiento en el paso 2.');
+    }
+    S.turno.aviso = avisos.join(' ');
+    render();
+    (S.paciente ? (trat ? $('#ticketCard') : $('#catalogo')) : $('#buscarPaciente')).scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   function renderHoy() {
@@ -744,6 +862,7 @@
     if (!S.usuario) return;
     renderAvisoFecha();
     renderSync();
+    renderTurnos();
     renderBandeja();
     renderPaciente();
     renderCatalogo();
@@ -779,7 +898,7 @@
     if (antes !== undefined && window.Cola.leer().length === antes) { renderSync(); return; }
     clearTimeout(refrescoPendiente);
     refrescoPendiente = setTimeout(async () => {
-      try { await Promise.all([cargarVentas(), cargarPacks()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
+      try { await Promise.all([cargarVentas(), cargarPacks(), marcarCobrados()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
       render();
     }, 300);
   }
@@ -808,6 +927,9 @@
       cargarHistorial(S.paciente.ref);
       return;
     }
+    if (d.turno) { usarTurno(d.turno); return; }
+    if (d.soltarturno !== undefined) { S.turno = null; render(); return; }
+    if (t.id === 'recargarTurnos') { cargarTurnos().then(render); return; }
     if (t.id === 'cambiarPaciente') { S.paciente = null; S.transfiriendo = null; render(); $('#buscarPaciente').focus(); return; }
     if (d.transferir) { S.transfiriendo = Number(d.transferir); S.buscarDestino = ''; renderPaciente(); $('#buscarDestino').focus(); return; }
     if (t.id === 'cancelarTransf') { S.transfiriendo = null; renderPaciente(); return; }
@@ -895,6 +1017,13 @@
       subir();
       return;
     }
+    if (d.adeudores) {
+      window.Cola.agregar('a_deudores', buscarVentaKey(d.adeudores));
+      render();
+      subir();
+      toast('Pasó a Deudores: ya no aparece acá', 'ok', 4000, { texto: 'Ver deudores', accion: () => { location.href = 'deudores.html'; } });
+      return;
+    }
     if (d.anular) {
       const motivo = prompt('¿Por qué se anula? (queda registrado; la venta no se borra)');
       if (!motivo || !motivo.trim()) return;
@@ -968,6 +1097,8 @@
       S.fecha = t.value || hoy();
       render();
       if (navigator.onLine) cargarVentas().then(render).catch(() => {});
+      if (S.turno) S.turno = null;
+      cargarTurnos().then(render);
       return;
     }
     if (d.precio) { S.items.find((i) => i.uid === Number(d.precio)).precio_cobrado = n(t.value); renderTicket(); return; }
@@ -1008,6 +1139,10 @@
     window.addEventListener('online', () => { renderSync(); refrescar(); });
     window.addEventListener('offline', renderSync);
     setInterval(() => { if (window.Cola.leer().length) subir(); }, 20000);
+    // Turnos recién marcados "Atendida" en el dashboard: cada 2 minutos y
+    // al volver a esta pestaña.
+    setInterval(() => { if (S.usuario && !document.hidden) cargarTurnos().then(renderTurnos); }, 120000);
+    document.addEventListener('visibilitychange', () => { if (S.usuario && !document.hidden) cargarTurnos().then(renderTurnos); });
     // Si la app queda abierta de un día para el otro, la fecha avanza sola
     // (salvo que alguien la haya cambiado a mano).
     let ultimoHoy = hoy();

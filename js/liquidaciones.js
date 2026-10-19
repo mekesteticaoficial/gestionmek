@@ -284,6 +284,7 @@
     try { await cargarProfs(); } catch (e) { M.toast(M.mensaje(e), 'error'); return; }
     cargarHoy();
     cargarHistorial();
+    if (window.MEKSemana) window.MEKSemana.iniciar();
   }
   iniciar();
 })();

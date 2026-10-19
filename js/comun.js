@@ -48,6 +48,7 @@
   const PAGINAS = [
     { id: 'cobro', href: 'index.html', nombre: 'Cobro' },
     { id: 'deudores', href: 'deudores.html', nombre: 'Deudores' },
+    { id: 'cabinas', href: 'cabinas.html', nombre: 'Cabinas' },
     { id: 'gastos', href: 'gastos.html', nombre: 'Gastos' },
     { id: 'liquidaciones', href: 'liquidaciones.html', nombre: 'Liquidaciones', admin: true },
     { id: 'panel', href: 'panel.html', nombre: 'Panel', admin: true },

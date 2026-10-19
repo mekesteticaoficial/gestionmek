@@ -31,7 +31,8 @@
   // tipo: 'venta' (payload = registrar_venta), 'cobrar' {venta_id|client_id, pagos},
   //       'anular' {venta_id|client_id, motivo},
   //       'gasto' (payload = registrar_gasto), 'anular_gasto' {gasto_id|client_id, motivo},
-  //       'pago_cuenta' (payload = registrar_pago_cuenta: pago parcial de una deudora)
+  //       'pago_cuenta' (payload = registrar_pago_cuenta: pago parcial de una deudora),
+  //       'a_deudores' {venta_id|client_id}: sacarla de la bandeja del cobro
   function agregar(tipo, payload) {
     const ops = leer();
     const op = { id: uuid(), tipo, payload, creado: new Date().toISOString(), intentos: 0, error: null };
@@ -82,6 +83,12 @@
       const { data, error } = await sb.rpc(fn, { p });
       if (error) throw error;
       return data;
+    }
+    if (op.tipo === 'a_deudores') {
+      const ventaId = p.venta_id || await idPorClient(sb, p.client_id);
+      const { error } = await sb.rpc('mandar_a_deudores', { p_venta: ventaId });
+      if (error) throw error;
+      return;
     }
     if (op.tipo === 'anular_gasto') {
       const gastoId = p.gasto_id || await idPorClient(sb, p.client_id, 'gastos');

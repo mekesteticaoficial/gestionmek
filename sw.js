@@ -3,11 +3,11 @@
 // versión nueva del servidor: un cambio publicado se ve en la apertura
 // siguiente.
 // No toca los pedidos a Supabase ni a Firebase: esos datos los maneja la app.
-const CACHE = 'mek-v4';
+const CACHE = 'mek-v6';
 const APP = [
-  './', 'index.html', 'deudores.html', 'gastos.html', 'liquidaciones.html', 'panel.html', 'acreedores.html', 'compras.html', 'catalogo.html',
-  'css/app.css', 'js/config.js', 'js/comun.js', 'js/calculo.js', 'js/cola.js', 'js/pacientes.js', 'js/app.js',
-  'js/deudores.js', 'js/gastos.js', 'js/liquidaciones.js', 'js/panel.js', 'js/acreedores.js', 'js/compras.js', 'js/catalogo.js',
+  './', 'index.html', 'deudores.html', 'cabinas.html', 'gastos.html', 'liquidaciones.html', 'panel.html', 'acreedores.html', 'compras.html', 'catalogo.html',
+  'css/app.css', 'js/config.js', 'js/comun.js', 'js/calculo.js', 'js/cola.js', 'js/pacientes.js', 'js/turnos.js', 'js/app.js',
+  'js/deudores.js', 'js/cabinas.js', 'js/semana.js', 'js/gastos.js', 'js/liquidaciones.js', 'js/panel.js', 'js/acreedores.js', 'js/compras.js', 'js/catalogo.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js',
 ];
 

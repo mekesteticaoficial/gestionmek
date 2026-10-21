@@ -51,7 +51,13 @@
     turnos: LS.get('turnos', { fecha: null, lista: [], cobrados: [] }),
     turnosError: null,
     turno: null,               // el turno que se está cobrando en el ticket
+    parcial: null,             // "pagó una parte": {medio, monto}
+    nombreOcasional: '',       // nombre libre cuando es "sin ficha"
   };
+
+  // Clienta sin ficha en el dashboard (sql/09_correcciones.sql).
+  const OCASIONAL = 'x_ocasional';
+  const esOcasional = () => S.paciente && S.paciente.ref === OCASIONAL;
 
   // ------------------------------------------------------------------
   // Carga de datos
@@ -405,20 +411,43 @@
     const errores = filas.some((f) => f.r.errores.length);
     const errPago = validarPagos(S.pagos, total);
     const faltaPaciente = !S.paciente;
+    const ocasional = esOcasional();
+    if (ocasional || total <= 0) S.parcial = null;
+    const pa = S.parcial;
+    const debe = pa && Number(pa.monto) > 0 ? C.r2(total - Number(pa.monto)) : null;
+    const errParcial = pa && (!pa.medio ? 'Elegí con qué pagó' : !(Number(pa.monto) > 0) ? 'Escribí cuánto pagó'
+      : debe <= 0 ? 'Si pagó todo, usá "Cobrar"' : null);
 
     el.innerHTML = htmlTurnoTicket() + filas.map(htmlItem).join('') +
       '<div class="total"><span>Total</span><b>' + plata(total) + '</b></div>' +
-      (total > 0 ? '<div class="pagos">' + htmlPagos(S.pagos, total, 't') + '</div>' : '') +
+      (total > 0 && !pa ? '<div class="pagos">' + htmlPagos(S.pagos, total, 't') + '</div>' : '') +
+      (pa ? '<div class="pagos parcial"><b>Pagó una parte</b>' +
+        '<div class="medios">' + MEDIOS.map(([k, n]) => '<button type="button" class="medio' + (pa.medio === k ? ' activo' : '') +
+          '" data-pmedio="' + k + '">' + n + '</button>').join('') + '</div>' +
+        '<label class="monto">Pagó $ <input type="number" inputmode="decimal" min="0" id="parcialMonto" value="' + (pa.monto == null ? '' : esc(pa.monto)) + '"></label>' +
+        '<div id="parcialDebe">' + (debe != null && debe > 0 ? 'Queda debiendo <b class="error">' + plata(debe) + '</b> (pasa a Deudores)' : '') + '</div>' +
+        '</div>' : '') +
+      (ocasional ? '<label class="nota">Nombre <input type="text" id="nombreOcasional" value="' + esc(S.nombreOcasional) +
+        '" placeholder="Opcional, para saber quién fue"></label>' : '') +
       '<label class="nota">Nota <input type="text" id="nota" value="' + esc(S.nota) + '" placeholder="Opcional"></label>' +
       (faltaPaciente ? '<div class="error">Falta elegir la paciente</div>' : '') +
       '<div class="acciones">' +
-        '<button type="button" class="primario grande" id="btnCobrar"' +
-          (errores || faltaPaciente || errPago ? ' disabled' : '') + '>' +
-          (total > 0 ? 'Cobrar ' + plata(total) : 'Confirmar') + '</button>' +
-        '<button type="button" class="secundario" id="btnPendiente"' + (errores || faltaPaciente ? ' disabled' : '') +
-          '>Se fue sin pagar · guardar sin cobrar</button>' +
+        (pa
+          ? '<button type="button" class="primario grande" id="btnParcial" data-bloqueado="' + (errores || faltaPaciente ? 1 : 0) + '"' +
+              (errores || faltaPaciente || errParcial ? ' disabled' : '') + '>' +
+              (debe > 0 ? 'Guardar: pagó ' + plata(pa.monto) + ', debe ' + plata(debe) : 'Guardar') + '</button>' +
+            '<button type="button" class="link" id="cancelarParcial">no, pagó todo o nada</button>'
+          : '<button type="button" class="primario grande" id="btnCobrar"' +
+              (errores || faltaPaciente || errPago ? ' disabled' : '') + '>' +
+              (total > 0 ? 'Cobrar ' + plata(total) : 'Confirmar') + '</button>' +
+            (ocasional ? '<div class="tenue centro">Sin ficha se cobra en el momento: no puede quedar debiendo.</div>'
+              : (total > 0 ? '<button type="button" class="secundario" id="btnParcialAbrir"' + (errores || faltaPaciente ? ' disabled' : '') +
+                  '>Pagó una parte y debe el resto</button>' : '') +
+                '<button type="button" class="secundario" id="btnPendiente"' + (errores || faltaPaciente ? ' disabled' : '') +
+                  '>Se fue sin pagar · guardar sin cobrar</button>')) +
       '</div>' +
-      (errPago && !errores && !faltaPaciente && total > 0 ? '<div class="tenue centro">' + esc(errPago) + '</div>' : '');
+      (pa && errParcial && !errores && !faltaPaciente ? '<div class="tenue centro">' + esc(errParcial) + '</div>' : '') +
+      (!pa && errPago && !errores && !faltaPaciente && total > 0 ? '<div class="tenue centro">' + esc(errPago) + '</div>' : '');
     renderBarraMovil(total);
   }
 
@@ -435,6 +464,8 @@
     S.nota = '';
     S.paciente = null;
     S.turno = null;
+    S.parcial = null;
+    S.nombreOcasional = '';
     $('#buscarPaciente').value = '';
   }
 
@@ -455,7 +486,9 @@
       fecha: S.fecha, paciente_ref: p.ref,
       paciente: { ref: p.ref, nombre: p.nombre, telefono: p.telefono, email: p.email },
       estado, pagos: estado === 'cobrada' ? pagos.filter((x) => Number(x.monto) > 0) : [],
-      nota: S.nota || null, items,
+      nota: [esOcasional() && S.nombreOcasional.trim() ? 'Nombre: ' + S.nombreOcasional.trim() : '', S.nota]
+        .filter(Boolean).join(' · ') || null,
+      items,
       // Turno del dashboard que se cobra: así no vuelve a aparecer.
       turno_ref: S.turno ? S.turno.ref : null,
     };
@@ -468,6 +501,13 @@
       const e = validarPagos(S.pagos, total);
       if (e) { toast(e, 'error'); return; }
     }
+    if (estado === 'pendiente' && esOcasional()) { toast('Sin ficha no puede quedar debiendo', 'error'); return; }
+    // "Pagó una parte": se guarda pendiente con lo que dejó.
+    const pa = estado === 'parcial' ? S.parcial : null;
+    if (pa) {
+      if (!pa.medio || !(Number(pa.monto) > 0) || Number(pa.monto) >= total) { toast('Revisá cuánto pagó', 'error'); return; }
+      estado = 'pendiente';
+    }
     const sinRegla = filas.filter((f) => f.r.sinRegla);
     if (sinRegla.length && !confirm('Sin regla de comisión:\n\n' +
         sinRegla.map((f) => '• ' + f.r.descripcion + ' — ' +
@@ -475,13 +515,15 @@
         '\n\nSe guarda sin comisión y queda en la lista para que Franco cargue la regla. ¿Seguir?')) return;
 
     const venta = nuevaVenta(estado, S.items.map(payloadItem), S.pagos.map((x) => ({ medio: x.medio, monto: Number(x.monto) })));
+    if (pa) { venta.entrega = [{ medio: pa.medio, monto: Number(pa.monto) }]; venta.entrega_id = window.Cola.uuid(); }
     const op = window.Cola.agregar('venta', venta);
-    const nombre = S.paciente.nombre;
+    const nombre = esOcasional() ? (S.nombreOcasional.trim() || 'Sin ficha') : S.paciente.nombre;
     const prof = S.items.map((i) => i.profesional_id).find(Boolean);
     if (prof && !(S.usuario && S.usuario.profesional_id)) LS.set('ultimoProf', prof);
     limpiarTicket();
     render();
-    toast((estado === 'cobrada' ? 'Cobrado: ' : 'Guardado sin cobrar: ') + nombre + ' · ' + plata(total) +
+    toast((pa ? 'Pagó ' + plata(pa.monto) + ' y debe ' + plata(C.r2(total - Number(pa.monto))) + ': '
+           : estado === 'cobrada' ? 'Cobrado: ' : 'Guardado sin cobrar: ') + nombre + ' · ' + plata(total) +
           (navigator.onLine ? '' : ' (sin conexión: se sube solo)'), 'ok');
     subir();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -528,7 +570,7 @@
   function buscarPacientes(q) {
     const palabras = norm(q).split(/\s+/).filter(Boolean);
     if (!palabras.length) return [];
-    return S.pacientes.filter((p) => { const n = norm(p.nombre); return palabras.every((w) => n.includes(w)); })
+    return S.pacientes.filter((p) => { const n = norm(p.nombre); return p.ref !== OCASIONAL && palabras.every((w) => n.includes(w)); })
       .sort((a, b) => a.nombre.localeCompare(b.nombre)).slice(0, 8);
   }
 
@@ -543,7 +585,8 @@
         '<li><button type="button" data-paciente="' + esc(p.ref) + '"><b>' + esc(p.nombre) + '</b>' +
         (p.telefono ? '<span class="tenue"> · …' + esc(String(p.telefono).slice(-4)) + '</span>' : '') + '</button></li>').join('') +
         (q.trim() && !res.length ? '<li class="tenue">No aparece. Tiene que estar cargada en el dashboard; ' +
-          'si la acaban de cargar, esperá unos segundos y buscá de nuevo.</li>' : '');
+          'si la acaban de cargar, esperá unos segundos y buscá de nuevo.</li>' : '') +
+        '<li><button type="button" class="link" id="sinFicha">No tiene ficha (vino de paso, ej. una cabina rápida)</button></li>';
       if (!$('#pacientesEstado').textContent) $('#pacientesEstado').textContent = S.pacientes.length + ' pacientes';
       return;
     }
@@ -691,7 +734,9 @@
       client_id: o.payload.client_id, fecha: o.payload.fecha, estado: o.payload.estado,
       pacienteNombre: o.payload.paciente ? o.payload.paciente.nombre : o.payload.paciente_ref,
       descripcion: o.payload.items.map((i) => descItem(i)).join(' + '),
-      total: o.payload.items.reduce((a, i) => a + (i.tipo === 'pack_sesion' ? 0 : Number(i.precio_cobrado) || 0), 0),
+      total: o.payload.items.reduce((a, i) => a + (i.tipo === 'pack_sesion' ? 0 : Number(i.precio_cobrado) || 0), 0) -
+             (o.payload.entrega || []).reduce((a, p) => a + Number(p.monto), 0),
+      pagos: o.payload.estado === 'pendiente' ? (o.payload.entrega || []) : [],
       enCola: true, error: o.error,
     }));
   }
@@ -703,7 +748,9 @@
 
   const deServidor = (v) => ({
     id: v.id, client_id: v.client_id, fecha: v.fecha, estado: v.estado, medio: v.medio_pago,
-    pacienteNombre: v.pacientes ? v.pacientes.nombre : v.paciente_ref,
+    pacienteNombre: v.paciente_ref === OCASIONAL
+      ? ((/Nombre: ([^·|]+)/.exec(v.nota || '') || [])[1] || '').trim().concat(' (sin ficha)').trim()
+      : v.pacientes ? v.pacientes.nombre : v.paciente_ref,
     descripcion: v.venta_items.map((i) => i.descripcion).join(' + '),
     // En una deuda con pagos a cuenta, lo que falta (lo que se cobra ahora).
     total: v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0) -
@@ -821,9 +868,11 @@
     const lista = cola.concat(srv);
     const el = $('#hoy');
     if (!lista.length) { el.innerHTML = '<p class="tenue">Todavía nada.</p>'; return; }
-    const cobrado = lista.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total, 0);
-    el.innerHTML = '<div class="tenue">Cobrado (bruto, caja): <b>' + plata(C.r2(cobrado)) + '</b></div>' +
-      lista.map((v) => {
+    const cobrado = lista.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total, 0) +
+      lista.filter((v) => v.estado === 'pendiente').reduce((a, v) => a + (v.pagos || []).reduce((s, p) => s + Number(p.monto), 0), 0);
+    // Las anuladas no suman en nada (caja, comisiones, liquidaciones):
+    // quedan guardadas solo como registro, plegadas al final.
+    const fila = (v) => {
         const ops = operacionesSobre(v);
         const anulando = ops.some((o) => o.tipo === 'anular');
         const estado = anulando ? 'anulando…' : v.estado;
@@ -837,7 +886,12 @@
           '<div class="der"><b>' + plata(v.total) + '</b>' +
           (v.estado !== 'anulada' && !anulando ? '<button type="button" class="link" data-anular="' + key + '">anular</button>' : '') +
           '</div></div>';
-      }).join('');
+    };
+    const anuladas = lista.filter((v) => v.estado === 'anulada');
+    el.innerHTML = '<div class="tenue">Cobrado (bruto, caja): <b>' + plata(C.r2(cobrado)) + '</b></div>' +
+      lista.filter((v) => v.estado !== 'anulada').map(fila).join('') +
+      (anuladas.length ? '<details class="anuladas"><summary>' + anuladas.length + (anuladas.length === 1 ? ' anulada' : ' anuladas') +
+        ' (no cuentan para nada, quedan solo como registro)</summary>' + anuladas.map(fila).join('') + '</details>' : '');
   }
 
   function renderSync() {
@@ -927,6 +981,17 @@
       cargarHistorial(S.paciente.ref);
       return;
     }
+    if (t.id === 'sinFicha') {
+      S.paciente = S.pacientes.find((p) => p.ref === OCASIONAL) || { ref: OCASIONAL, nombre: 'Sin ficha (ocasional)', telefono: null, email: null };
+      S.transfiriendo = null;
+      S.historial = null;
+      render();
+      return;
+    }
+    if (t.id === 'btnParcialAbrir') { S.parcial = { medio: null, monto: null }; renderTicket(); $('#parcialMonto').focus(); return; }
+    if (t.id === 'cancelarParcial') { S.parcial = null; renderTicket(); return; }
+    if (d.pmedio) { S.parcial.medio = d.pmedio; renderTicket(); return; }
+    if (t.id === 'btnParcial') { confirmar('parcial'); return; }
     if (d.turno) { usarTurno(d.turno); return; }
     if (d.soltarturno !== undefined) { S.turno = null; render(); return; }
     if (t.id === 'recargarTurnos') { cargarTurnos().then(render); return; }
@@ -1074,6 +1139,22 @@
       return;
     }
     if (t.id === 'nota') { S.nota = t.value; return; }
+    if (t.id === 'nombreOcasional') { S.nombreOcasional = t.value; return; }
+    if (t.id === 'parcialMonto') {
+      // Se actualiza en el lugar, sin redibujar: si no, el clic en
+      // "Guardar" justo después de escribir se pierde.
+      S.parcial.monto = t.value.trim() === '' ? null : Math.max(0, Number(t.value.replace(',', '.')) || 0);
+      const total = calcular().total;
+      const debe = C.r2(total - (Number(S.parcial.monto) || 0));
+      const ok = S.parcial.medio && Number(S.parcial.monto) > 0 && debe > 0;
+      $('#parcialDebe').innerHTML = Number(S.parcial.monto) > 0 && debe > 0
+        ? 'Queda debiendo <b class="error">' + plata(debe) + '</b> (pasa a Deudores)'
+        : Number(S.parcial.monto) > 0 ? '<span class="error">Si pagó todo, usá "Cobrar"</span>' : '';
+      const b = $('#btnParcial');
+      b.disabled = !ok || b.dataset.bloqueado === '1';
+      b.textContent = ok ? 'Guardar: pagó ' + plata(S.parcial.monto) + ', debe ' + plata(debe) : 'Guardar';
+      return;
+    }
     if (d.zona) {
       const id = Number(d.zona);
       S.depi.zonas = t.checked ? S.depi.zonas.concat(id) : S.depi.zonas.filter((z) => z !== id);

@@ -18,10 +18,24 @@
 
   <main class="pagina">
     <section class="card">
+      <div class="titulo-fila">
+        <h2 id="semanaTitulo">La semana</h2>
+        <div class="fila">
+          <button type="button" class="chip" id="semanaAnt" aria-label="Semana anterior">‹ anterior</button>
+          <button type="button" class="chip" id="semanaHoy">esta semana</button>
+          <button type="button" class="chip" id="semanaSig" aria-label="Semana siguiente">siguiente ›</button>
+        </div>
+      </div>
+      <div id="semanaDatos"><p class="tenue">Cargando…</p></div>
+    </section>
+
+    <section class="card">
       <div class="titulo-fila"><h2>Al día de hoy</h2><button type="button" class="link" id="refrescarHoy">actualizar</button></div>
       <p class="explica">Lo que se le debe a cada una en este momento: lo que ganó y todavía no se liquidó, menos lo que ya se le adelantó. Se actualiza con cada cobro.</p>
       <div id="hoy" class="kpis"></div>
       <div id="adelanto"></div>
+      <div id="ajusteHoy"></div>
+      <p class="explica" style="margin-top:10px">¿Un cobro quedó a nombre de quien no lo hizo? En <b>Liquidar</b>, tocá <b>ver</b> y después <b>“no lo hizo…”</b> en ese renglón: se corrige y se recalcula la comisión. Si ya estaba liquidado, usá un <b>Ajuste</b>.</p>
     </section>
 
     <section class="card">
@@ -49,6 +63,7 @@
   <script src="js/config.js"></script>
   <script src="js/comun.js"></script>
   <script src="js/cola.js"></script>
+  <script src="js/semana.js"></script>
   <script src="js/liquidaciones.js"></script>
 </body>
 </html>

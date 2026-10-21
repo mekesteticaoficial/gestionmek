@@ -274,3 +274,8 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: .92rem; }
 .bandeja.turnos h2 { color: var(--marca); }
 .turno-ticket { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 10px;
   margin-bottom: 10px; border-radius: 8px; background: var(--marca-suave); border: 1px solid var(--marca); font-size: .92rem; }
+
+/* Anuladas plegadas en "Cargado hoy" y "pagó una parte" */
+details.anuladas { margin-top: 8px; font-size: .9rem; }
+details.anuladas summary { cursor: pointer; color: var(--suave, #777); padding: 6px 0; }
+.pagos.parcial { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--marca); border-radius: 8px; }

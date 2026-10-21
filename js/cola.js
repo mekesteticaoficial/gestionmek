@@ -33,6 +33,8 @@
   //       'gasto' (payload = registrar_gasto), 'anular_gasto' {gasto_id|client_id, motivo},
   //       'pago_cuenta' (payload = registrar_pago_cuenta: pago parcial de una deudora),
   //       'a_deudores' {venta_id|client_id}: sacarla de la bandeja del cobro
+  // Una 'venta' pendiente puede traer entrega:[{medio, monto}] + entrega_id
+  // (pagó una parte y debe el resto).
   function agregar(tipo, payload) {
     const ops = leer();
     const op = { id: uuid(), tipo, payload, creado: new Date().toISOString(), intentos: 0, error: null };
@@ -48,7 +50,9 @@
     const op = ops.find((o) => o.tipo === 'venta' && o.payload.client_id === clientId);
     if (!op) return false;
     op.payload.estado = 'cobrada';
-    op.payload.pagos = pagos;
+    // Lo que había dejado a cuenta va junto con el resto del pago.
+    op.payload.pagos = (op.payload.entrega || []).concat(pagos);
+    delete op.payload.entrega;
     escribir(ops);
     return true;
   }
@@ -82,6 +86,12 @@
       const fn = { venta: 'registrar_venta', gasto: 'registrar_gasto', pago_cuenta: 'registrar_pago_cuenta' }[op.tipo];
       const { data, error } = await sb.rpc(fn, { p });
       if (error) throw error;
+      // "Pagó una parte": la venta entra pendiente y se le aplica lo que
+      // dejó. entrega_id es fijo, así que reintentar no lo cobra dos veces.
+      if (op.tipo === 'venta' && p.entrega && p.entrega.length) {
+        const r = await sb.rpc('registrar_entrega', { p_venta: data.venta_id, p_pagos: p.entrega, p_client_id: p.entrega_id });
+        if (r.error) throw r.error;
+      }
       return data;
     }
     if (op.tipo === 'a_deudores') {

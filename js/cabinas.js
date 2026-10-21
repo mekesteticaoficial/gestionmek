@@ -92,12 +92,80 @@
     subir();
   }
 
+  // ------------------------------------------------------------ cabina suelta
+  // Sin ficha: va a la paciente fija 'x_ocasional' (sql/09_correcciones.sql),
+  // siempre cobrada. El nombre, si lo dicen, queda en la nota.
+  const OCASIONAL = { ref: 'x_ocasional', nombre: 'Sin ficha (ocasional)', telefono: null, email: null };
+  let cabinas = M.LS.get('cabinas_sueltas', []);
+  let suelta = { id: null, precio: null, medio: null, nombre: '' };
+
+  async function cargarCabinas() {
+    try {
+      const [t, p] = await Promise.all([
+        sb.from('tratamientos').select('id,nombre,categoria,pack_sesiones,activo').eq('categoria', 'cabina').eq('activo', true).order('nombre'),
+        sb.from('precios_tratamiento').select('tratamiento_id,precio,vigente_desde'),
+      ]);
+      if (t.error || p.error) throw t.error || p.error;
+      const hoy = M.hoy();
+      cabinas = t.data.filter((x) => !x.pack_sesiones).map((x) => {
+        const v = p.data.filter((r) => r.tratamiento_id === x.id && String(r.vigente_desde).slice(0, 10) <= hoy)
+          .sort((a, b) => (a.vigente_desde < b.vigente_desde ? 1 : -1))[0];
+        return { id: x.id, nombre: x.nombre, precio: v ? Number(v.precio) : null };
+      }).sort((a, b) => (parseInt(a.nombre.replace(/\D+/g, ' ').trim(), 10) || 0) - (parseInt(b.nombre.replace(/\D+/g, ' ').trim(), 10) || 0));
+      M.LS.set('cabinas_sueltas', cabinas);
+    } catch (e) { /* sin red: se usa la lista guardada */ }
+    renderSuelta();
+  }
+
+  function renderSuelta() {
+    const el = $('#suelta');
+    if (!cabinas.length) { el.innerHTML = '<p class="tenue">Cargando cabinas…</p>'; return; }
+    const elegida = cabinas.find((c) => c.id === suelta.id);
+    el.innerHTML = '<div class="grilla">' + cabinas.map((c) => '<button type="button" class="opcion' + (c.id === suelta.id ? ' activo' : '') +
+        '" data-suelta="' + c.id + '"><span>' + M.esc(c.nombre) + '</span><small>' + (c.precio == null ? 'sin precio' : M.plata(c.precio)) + '</small></button>').join('') + '</div>' +
+      (elegida ? '<div class="form" style="margin-top:10px">' +
+        '<label>Cobrado $ <input type="number" id="sueltaPrecio" min="0" step="1" inputmode="decimal" value="' + (suelta.precio == null ? '' : suelta.precio) + '"></label>' +
+        '<label>Nombre <input id="sueltaNombre" value="' + M.esc(suelta.nombre) + '" placeholder="Opcional"></label></div>' +
+        '<div class="medios" style="margin-top:8px">' + M.MEDIOS.map(([k, n]) => '<button type="button" class="medio' + (suelta.medio === k ? ' activo' : '') +
+          '" data-sueltamedio="' + k + '">' + n + '</button>').join('') + '</div>' +
+        '<div class="acciones fila"><button type="button" class="primario" id="sueltaGuardar">Registrar ' + M.esc(elegida.nombre) + '</button>' +
+        '<button type="button" class="link" id="sueltaCancelar">cancelar</button></div>' : '');
+  }
+
+  function guardarSuelta() {
+    const c = cabinas.find((x) => x.id === suelta.id);
+    const precio = M.numero($('#sueltaPrecio').value);
+    const nombre = $('#sueltaNombre').value.trim();
+    if (!(precio > 0)) { M.toast('Falta lo que pagó', 'error'); return; }
+    if (!suelta.medio) { M.toast('Elegí con qué pagó', 'error'); return; }
+    window.Cola.agregar('venta', { fecha: M.hoy(), paciente_ref: OCASIONAL.ref, paciente: OCASIONAL, estado: 'cobrada',
+      pagos: [{ medio: suelta.medio, monto: precio }], nota: nombre ? 'Nombre: ' + nombre : null,
+      items: [{ tipo: 'cabina', tratamiento_id: c.id, cantidad: 1, precio_cobrado: precio }] });
+    M.toast(c.nombre + ' registrada · ' + M.plata(precio) + (navigator.onLine ? '' : ' (sin conexión: se sube sola)'), 'ok');
+    suelta = { id: null, precio: null, medio: null, nombre: '' };
+    renderSuelta();
+    renderSync();
+    subir();
+  }
+
   async function subir() { await window.Cola.procesar(sb); await cargar(); }
 
   document.addEventListener('click', (ev) => {
     const t = ev.target.closest('button');
     if (!t) return;
     if (t.dataset.usar) usar(Number(t.dataset.usar));
+    if (t.dataset.suelta) {
+      const c = cabinas.find((x) => x.id === Number(t.dataset.suelta));
+      const nombre = $('#sueltaNombre') ? $('#sueltaNombre').value : suelta.nombre;
+      suelta = { id: c.id, precio: c.precio, medio: suelta.medio, nombre };
+      renderSuelta();
+    }
+    if (t.dataset.sueltamedio) {
+      suelta.precio = M.numero($('#sueltaPrecio').value); suelta.nombre = $('#sueltaNombre').value;
+      suelta.medio = t.dataset.sueltamedio; renderSuelta();
+    }
+    if (t.id === 'sueltaGuardar') guardarSuelta();
+    if (t.id === 'sueltaCancelar') { suelta = { id: null, precio: null, medio: null, nombre: '' }; renderSuelta(); }
     if (t.id === 'sync') subir();
   });
   document.addEventListener('input', (ev) => { if (ev.target.id === 'buscar') render(); });
@@ -108,6 +176,8 @@
     if (!usuario) return;
     M.salirBoton();
     render();
+    renderSuelta();
+    cargarCabinas();
     window.Cola.alCambiar(renderSync);
     window.addEventListener('online', subir);
     if (!tratamientos.length && navigator.onLine) {

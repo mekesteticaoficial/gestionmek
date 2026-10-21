@@ -9,6 +9,8 @@
   let desdeTocado = false;          // si Franco cambió "Desde", no se pisa
   let hoyDatos = [];                // vista previa al día de hoy, por profesional
   let adelanto = null;              // {prof, monto, medio, fecha, cid}
+  let ajusteHoy = null;             // {prof, signo, monto, motivo}: ajuste sin cerrar
+  let corrigiendo = null;           // venta_item_id al que se le cambia quién lo hizo
 
   // Sábado más reciente (la semana de Yael cierra el sábado).
   function ultimoSabado() {
@@ -58,9 +60,61 @@
         (d.sin_regla.length ? '<br><span class="error">' + d.sin_regla.length + ' sin regla de comisión</span>' : '') +
         (d.pendientes_cobro.length ? '<br>' + d.pendientes_cobro.length + ' atención(es) sin cobrar, todavía no suman' : '') + '</div>' +
         '<div class="fila" style="margin-top:8px"><button type="button" class="primario" data-adelantar="' + d.id + '">Registrar adelanto</button>' +
+        '<button type="button" class="secundario" style="width:auto" data-ajustar="' + d.id + '">Ajuste (+ o −)</button>' +
         '<button type="button" class="link" data-verprof="' + d.id + '">ver detalle</button></div></div>';
     }).join('') : '<p class="tenue">Nadie tiene nada pendiente de liquidar.</p>';
+    // Para ajustar a alguien que hoy no tiene nada pendiente.
+    const sin = profs.filter((p) => !con.some((d) => d.id === p.id));
+    if (sin.length) $('#hoy').insertAdjacentHTML('beforeend', '<div class="fila tenue" style="margin-top:8px;grid-column:1/-1">Ajuste a ' +
+      sin.map((p) => '<button type="button" class="link" data-ajustar="' + p.id + '">' + M.esc(p.nombre) + '</button>').join(' ') + '</div>');
     renderAdelanto();
+    renderAjusteHoy();
+  }
+
+  // Ajuste a mano sin cerrar: queda pendiente y entra en el próximo cierre.
+  function renderAjusteHoy() {
+    const el = $('#ajusteHoy');
+    if (!el) return;
+    if (!ajusteHoy) { el.innerHTML = ''; return; }
+    const p = profs.find((x) => x.id === ajusteHoy.prof) || {};
+    el.innerHTML = '<div class="pend" style="margin-top:12px"><b>Ajuste a ' + M.esc(p.nombre || '') + '</b>' +
+      '<div class="tenue">Queda anotado y se aplica solo en su próxima liquidación. Para deshacerlo, cargá el contrario.</div>' +
+      '<div class="medios" style="margin-top:8px">' +
+        '<button type="button" class="medio' + (ajusteHoy.signo === -1 ? ' activo' : '') + '" data-ajsigno="-1">− Descontarle</button>' +
+        '<button type="button" class="medio' + (ajusteHoy.signo === 1 ? ' activo' : '') + '" data-ajsigno="1">+ Sumarle</button></div>' +
+      '<div class="form" style="margin-top:8px"><label>Monto $ <input type="number" id="ajhMonto" min="0" step="0.01" inputmode="decimal" value="' + M.esc(ajusteHoy.monto) + '"></label>' +
+      '<label class="ancho">Motivo <input id="ajhMotivo" value="' + M.esc(ajusteHoy.motivo) + '" placeholder="Ej: depilación del 18/10 la hizo Silvia"></label></div>' +
+      '<div class="acciones fila"><button type="button" class="primario" id="ajhGuardar">Guardar ajuste</button>' +
+      '<button type="button" class="link" id="ajhCancelar">cancelar</button></div></div>';
+  }
+
+  async function guardarAjusteHoy() {
+    // Se lee del formulario al tocar el botón (no se espera al "change").
+    const monto = M.numero($('#ajhMonto').value);
+    const motivo = $('#ajhMotivo').value.trim();
+    if (!ajusteHoy.signo) { M.toast('Elegí si se le descuenta o se le suma', 'error'); return; }
+    if (!(monto > 0)) { M.toast('Falta el monto', 'error'); return; }
+    if (!motivo) { M.toast('Falta el motivo', 'error'); return; }
+    const { error } = await sb.rpc('registrar_ajuste', { p_prof: ajusteHoy.prof, p_monto: ajusteHoy.signo * monto, p_motivo: motivo });
+    if (error) { M.toast(/registrar_ajuste/.test(error.message || '') ? 'Falta correr 09_correcciones.sql en Supabase' : M.mensaje(error), 'error'); return; }
+    M.toast('Ajuste de ' + (ajusteHoy.signo < 0 ? '−' : '+') + M.plata(monto) + ' anotado', 'ok');
+    ajusteHoy = null;
+    await cargarHoy();
+    if (preview) ver();
+  }
+
+  async function corregir(itemId) {
+    const prof = Number($('#corrProf').value);
+    const motivo = $('#corrMotivo').value.trim();
+    if (!prof) { M.toast('Elegí quién lo hizo', 'error'); return; }
+    if (!motivo) { M.toast('Falta el motivo', 'error'); return; }
+    const { data, error } = await sb.rpc('corregir_profesional', { p_item: itemId, p_prof: prof, p_motivo: motivo });
+    if (error) { M.toast(/corregir_profesional/.test(error.message || '') ? 'Falta correr 09_correcciones.sql en Supabase' : M.mensaje(error), 'error'); return; }
+    M.toast(data.sin_cambios ? 'Ya figuraba así' : 'Listo: ahora figura ' + data.ahora +
+      (data.comision_ahora == null ? ' (sin regla de comisión: cargala en Precios)' : ''), data.comision_ahora == null ? 'error' : 'ok');
+    corrigiendo = null;
+    await ver();
+    cargarHoy();
   }
 
   function renderAdelanto() {
@@ -116,7 +170,14 @@
       '<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Fecha</th><th>Paciente</th><th>Qué</th><th class="num">Cobrado</th><th class="num">' +
         queCobra + '</th></tr></thead><tbody>' +
       (p.items.length ? p.items.map((i) => '<tr><td>' + M.fechaCorta(i.fecha) + '</td><td>' + M.esc(i.paciente || '') + '</td><td>' +
-        M.esc(i.descripcion) + '</td><td class="num">' + M.plata(i.cobrado) + '</td><td class="num">' + M.plata(i.monto) + '</td></tr>').join('')
+        M.esc(i.descripcion) + ' <button type="button" class="link" data-corregir="' + i.venta_item_id + '" title="Si lo cargaron a nombre de otra">no lo hizo ' +
+        M.esc(p.profesional.split(' ')[0]) + '</button></td><td class="num">' + M.plata(i.cobrado) + '</td><td class="num">' + M.plata(i.monto) + '</td></tr>' +
+        (corrigiendo === i.venta_item_id ? '<tr><td colspan="5"><div class="fila">Lo hizo <select id="corrProf"><option value="">— elegir —</option>' +
+          profs.filter((x) => x.nombre !== p.profesional).map((x) => '<option value="' + x.id + '">' + M.esc(x.nombre) + '</option>').join('') +
+          '</select> <input id="corrMotivo" placeholder="Motivo (ej. se cargó mal)" style="max-width:260px">' +
+          '<button type="button" class="primario" data-corrguardar="' + i.venta_item_id + '">Corregir</button>' +
+          '<button type="button" class="link" data-corrcancelar>cancelar</button></div>' +
+          '<div class="tenue">Se le saca a ' + M.esc(p.profesional) + ' y se recalcula la comisión con la regla de la que lo hizo (Silvia no cobra comisión).</div></td></tr>' : '')).join('')
         : '<tr><td colspan="5" class="tenue">No hay cobros nuevos para liquidar.</td></tr>') +
       '<tr class="total"><td colspan="4">Subtotal (' + p.items.length + ')</td><td class="num">' + M.plata(p.total) + '</td></tr>' +
       p.ajustes.map((a) => '<tr><td colspan="4">Ajuste: ' + M.esc(a.motivo) + '</td><td class="num">' + M.plata(a.monto) + '</td></tr>').join('') +
@@ -124,7 +185,7 @@
         '"></td><td><button type="button" class="link" data-ajsacar="' + i + '">sacar</button></td><td class="num"><input type="number" step="0.01" data-ajmonto="' + i +
         '" value="' + M.esc(a.monto) + '" placeholder="± monto" style="width:120px"></td></tr>').join('') +
       '<tr><td colspan="5"><button type="button" class="link" id="agregarAjuste">+ ajuste a mano (premio, descuento, corrección)</button></td></tr>' +
-      '<tr class="total"><td colspan="4">A pagar</td><td class="num">' + M.plata(neto) + '</td></tr>' +
+      '<tr class="total"><td colspan="4">A pagar</td><td class="num" id="aPagar">' + M.plata(neto) + '</td></tr>' +
       '</tbody></table></div>' +
       (neto < 0 ? '<p class="aviso">El saldo da negativo: no se paga nada y la diferencia se descuenta en la próxima.</p>' : '') +
       '<div class="form" style="margin-top:12px">' +
@@ -259,16 +320,34 @@
       adelanto.monto = M.r2(Number(x.total) + Number(x.total_ajustes)); adelanto.cid = null; renderAdelanto();
     }
     if (t.id === 'refrescarHoy') cargarHoy();
+    if (d.ajustar) { ajusteHoy = { prof: Number(d.ajustar), signo: -1, monto: '', motivo: '' }; renderAjusteHoy(); $('#ajhMonto').focus(); }
+    if (d.ajsigno) { ajusteHoy.monto = $('#ajhMonto').value; ajusteHoy.motivo = $('#ajhMotivo').value; ajusteHoy.signo = Number(d.ajsigno); renderAjusteHoy(); }
+    if (t.id === 'ajhGuardar') guardarAjusteHoy();
+    if (t.id === 'ajhCancelar') { ajusteHoy = null; renderAjusteHoy(); }
+    if (d.corregir) { corrigiendo = Number(d.corregir); renderPreview(); }
+    if (d.corrcancelar !== undefined) { corrigiendo = null; renderPreview(); }
+    if (d.corrguardar) corregir(Number(d.corrguardar));
     if (d.verprof) {
       $('#prof').value = d.verprof; desdeTocado = false; $('#hasta').value = M.hoy();
       ver().then(() => $('#preview').scrollIntoView({ behavior: 'smooth' }));
     }
     if (d.pagar) pagar(Number(d.pagar));
   });
+  // Ajustes a mano del cierre: se guardan mientras se escribe y solo se
+  // actualiza el total. Antes se redibujaba la tabla al salir del campo y
+  // el clic en "Cerrar liquidación" que venía justo después se perdía.
+  document.addEventListener('input', (ev) => {
+    const d = ev.target.dataset;
+    if (d.ajmotivo !== undefined) ajustesManuales[Number(d.ajmotivo)].motivo = ev.target.value;
+    if (d.ajmonto !== undefined) {
+      ajustesManuales[Number(d.ajmonto)].monto = ev.target.value;
+      const manual = ajustesManuales.reduce((a, x) => a + (M.numero(x.monto) || 0), 0);
+      const el = $('#aPagar');
+      if (el && preview) el.textContent = M.plata(M.r2(Number(preview.total) + Number(preview.total_ajustes) + manual));
+    }
+  });
   document.addEventListener('change', (ev) => {
     const d = ev.target.dataset;
-    if (d.ajmonto !== undefined) { ajustesManuales[Number(d.ajmonto)].monto = ev.target.value; renderPreview(); }
-    if (d.ajmotivo !== undefined) { ajustesManuales[Number(d.ajmotivo)].motivo = ev.target.value; }
     if (ev.target.id === 'prof') { desdeTocado = false; preview = null; renderPreview(); }
     if (ev.target.id === 'hasta') { preview = null; renderPreview(); }
     if (ev.target.id === 'desde') desdeTocado = true;

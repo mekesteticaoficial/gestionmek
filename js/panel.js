@@ -35,7 +35,9 @@
       data.medios = c.medios;
       data.caja.de_profesionales = Number(c.de_profesionales || 0);
       data.caja.directo = c.directo || [];
-      data.caja.entradas = M.r2(Number(c.cobros) + Number(c.prestamos) + data.caja.de_profesionales);
+      data.caja.giftcards = Number(c.giftcards || 0);
+      data.caja.pagado_con_giftcard = Number(c.pagado_con_giftcard || 0);
+      data.caja.entradas = M.r2(Number(c.cobros) + Number(c.prestamos) + data.caja.de_profesionales + data.caja.giftcards);
       data.caja.movimiento = M.r2(data.caja.entradas - Number(data.caja.salidas));
       data.caja.a_cuenta = c.a_cuenta;
       data.caja.prestamos = c.prestamos;
@@ -89,8 +91,10 @@
             '</td><td class="num">' + P(m.monto) + '</td></tr>').join('') +
           (Number(c.prestamos) ? '<tr><td>Préstamos que entraron</td><td class="num">' + P(c.prestamos) + '</td></tr>' : '') +
           (c.de_profesionales ? '<tr><td>Lo que pagaron profesionales que debían</td><td class="num">' + P(c.de_profesionales) + '</td></tr>' : '') +
+          (c.giftcards ? '<tr><td>Gift cards vendidas</td><td class="num">' + P(c.giftcards) + '</td></tr>' : '') +
           '<tr class="total"><td>Total</td><td class="num">' + P(c.entradas) + '</td></tr>' : '<tr><td class="tenue">Sin pagos.</td></tr>') +
         (Number(c.a_cuenta) ? '<tr><td colspan="2" class="tenue">Incluye ' + P(c.a_cuenta) + ' de pagos a cuenta de deudoras.</td></tr>' : '') +
+        (c.pagado_con_giftcard ? '<tr><td colspan="2" class="tenue">Además se usaron ' + P(c.pagado_con_giftcard) + ' de gift cards (no es plata nueva: entró cuando se vendieron).</td></tr>' : '') +
         ((c.directo || []).length ? '<tr><td colspan="2" class="tenue">No entraron a MEK (los cobraron directo y se les descuenta en la liquidación): ' +
           c.directo.map((x) => M.esc(x.profesional) + ' ' + P(x.monto)).join(' · ') + '</td></tr>' : '') +
         '</tbody></table></div>' +

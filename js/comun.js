@@ -17,7 +17,7 @@
     ['efectivo', 'Efectivo'], ['transferencia', 'Transferencia'], ['debito', 'Débito'],
     ['credito', 'Crédito'], ['mercadopago', 'Mercado Pago'],
   ];
-  const nombreMedio = (m) => (MEDIOS.find((x) => x[0] === m) || [m, m || '—'])[1];
+  const nombreMedio = (m) => (m === 'giftcard' ? 'Gift card' : (MEDIOS.find((x) => x[0] === m) || [m, m || '—'])[1]);
 
   // A quién le llegó la plata (sql/11_cobros_directos.sql). destino:
   // 'franco' | 'silvia' | 'qr' (cuentas de MEK), 'p:<id>' (una profesional
@@ -77,6 +77,7 @@
     { id: 'cobro', href: 'index.html', nombre: 'Cobro' },
     { id: 'deudores', href: 'deudores.html', nombre: 'Deudores' },
     { id: 'cabinas', href: 'cabinas.html', nombre: 'Cabinas' },
+    { id: 'giftcards', href: 'giftcards.html', nombre: 'Gift cards' },
     { id: 'gastos', href: 'gastos.html', nombre: 'Gastos' },
     { id: 'liquidaciones', href: 'liquidaciones.html', nombre: 'Liquidaciones', admin: true },
     { id: 'panel', href: 'panel.html', nombre: 'Panel', admin: true },

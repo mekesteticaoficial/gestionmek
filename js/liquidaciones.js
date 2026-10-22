@@ -301,6 +301,40 @@
     cargarHoy();
   }
 
+  // ------------------------------------------------ quién atendió a quién
+  // Por qué una atención entra o no en la liquidación de alguien.
+  function situacion(a) {
+    if (a.estado === 'anulada') return ['tenue', 'Anulada: no cuenta'];
+    if (!a.profesional_id) return ['tenue', a.tipo === 'producto' ? 'Producto: sin profesional' : 'Sin profesional (no lleva comisión)'];
+    if (a.estado === 'pendiente') return ['aviso', 'Sin cobrar todavía: entra cuando se termine de cobrar'];
+    if (a.comision_tipo == null && a.modelo !== 'invitado_cobra_el') return ['error', 'Sin regla de comisión: no suma hasta cargarla'];
+    if (a.liquidacion_id) return ['ok', 'Liquidada (n.º ' + a.liquidacion_id + ')'];
+    if (a.modelo === 'interno' && !(Number(a.comision_monto) > 0)) return ['tenue', 'Sin comisión (queda para MEK)'];
+    if (a.modelo === 'invitado_cobra_el') return ['tenue', 'Cobró ella/él: solo se registró la parte de MEK'];
+    return ['ok', 'Para la próxima liquidación'];
+  }
+
+  async function verAtenciones() {
+    const el = $('#atenciones');
+    el.innerHTML = '<p class="tenue">Buscando…</p>';
+    const { data, error } = await sb.rpc('atenciones_periodo', { p_desde: $('#atDesde').value, p_hasta: $('#atHasta').value, p_buscar: $('#atBuscar').value || null });
+    if (error) { el.innerHTML = '<p class="error">' + M.esc(/atenciones_periodo/.test(error.message || '') ? 'Falta correr 12_giftcards_y_controles.sql en Supabase' : M.mensaje(error)) + '</p>'; return; }
+    const prof = $('#atProf').value;
+    const lista = data.filter((a) => !prof || String(a.profesional_id) === prof);
+    el.innerHTML = lista.length ? '<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Fecha</th><th>Paciente</th><th>Qué</th><th>Lo hizo</th>' +
+      '<th class="num">Cobrado</th><th class="num">Comisión / su parte</th><th>Situación</th><th>Lo cargó</th></tr></thead><tbody>' +
+      lista.map((a) => {
+        const [cl, txt] = situacion(a);
+        const parte = a.tercero_monto != null ? a.tercero_monto : a.comision_monto;
+        return '<tr' + (a.estado === 'anulada' ? ' class="tenue"' : '') + '><td>' + M.fechaCorta(a.fecha) + '</td><td>' + M.esc(a.paciente || '') + '</td><td>' +
+          M.esc(a.descripcion) + '</td><td><b>' + M.esc(a.profesional || '—') + '</b></td><td class="num">' + M.plata(a.precio_cobrado) +
+          '</td><td class="num">' + (a.profesional_id ? M.plata(parte) : '—') + '</td><td><span class="' + cl + '">' + M.esc(txt) + '</span>' +
+          (a.nota && /Corregido/.test(a.nota) ? '<div class="tenue" style="font-size:.8rem">' + M.esc(a.nota) + '</div>' : '') +
+          '</td><td class="tenue">' + M.esc(a.creado_por || '') + '</td></tr>';
+      }).join('') + '</tbody></table></div><p class="tenue">' + lista.length + ' atención(es).</p>'
+      : '<p class="tenue">No hay atenciones con esos filtros.</p>';
+  }
+
   async function resolver() {
     const { data, error } = await sb.rpc('resolver_items_sin_regla');
     if (error) { M.toast(M.mensaje(error), 'error'); return; }
@@ -327,6 +361,7 @@
       adelanto.monto = M.r2(Number(x.total) + Number(x.total_ajustes)); adelanto.cid = null; renderAdelanto();
     }
     if (t.id === 'refrescarHoy') cargarHoy();
+    if (t.id === 'atVer') verAtenciones();
     if (d.ajustar) { ajusteHoy = { prof: Number(d.ajustar), signo: -1, monto: '', motivo: '' }; renderAjusteHoy(); $('#ajhMonto').focus(); }
     if (d.ajsigno) { ajusteHoy.monto = $('#ajhMonto').value; ajusteHoy.motivo = $('#ajhMotivo').value; ajusteHoy.signo = Number(d.ajsigno); renderAjusteHoy(); }
     if (t.id === 'ajhGuardar') guardarAjusteHoy();
@@ -368,6 +403,11 @@
     M.salirBoton();
     $('#hasta').value = ultimoSabado();
     try { await cargarProfs(); } catch (e) { M.toast(M.mensaje(e), 'error'); return; }
+    // Quién atendió a quién: por defecto, las últimas dos semanas, todas.
+    $('#atHasta').value = M.hoy();
+    const d = new Date(); d.setDate(d.getDate() - 14); $('#atDesde').value = d.toLocaleDateString('en-CA');
+    const { data: todas } = await sb.from('profesionales').select('id,nombre').order('id');
+    $('#atProf').innerHTML = '<option value="">Todas</option>' + (todas || []).map((p) => '<option value="' + p.id + '">' + M.esc(p.nombre) + '</option>').join('');
     cargarHoy();
     cargarHistorial();
     if (window.MEKSemana) window.MEKSemana.iniciar();

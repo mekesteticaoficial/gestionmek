@@ -26,15 +26,17 @@
     return best ? Number(best.precio) : null;
   }
 
-  // Primero la regla del tratamiento, después la de la categoría.
+  // Primero la regla del tratamiento, después la de la categoría, y por
+  // último la de categoría '*' (todo lo que hace). Igual que fn_regla (12).
   function regla(cat, profId, trat, categoria, fecha) {
     let best = null, bestRank = null;
     for (const r of cat.reglas) {
       if (r.profesional_id !== profId || r.vigente_desde > fecha) continue;
       const esTrat = !!trat && r.tratamiento_id === trat.id;
       const esCat = r.tratamiento_id == null && r.categoria === categoria;
-      if (!esTrat && !esCat) continue;
-      const rank = [esTrat ? 1 : 0, r.vigente_desde, r.id];
+      const esTodo = r.tratamiento_id == null && r.categoria === '*';
+      if (!esTrat && !esCat && !esTodo) continue;
+      const rank = [esTrat ? 1 : 0, esTodo ? 0 : 1, r.vigente_desde, r.id];
       if (!best || cmp(rank, bestRank) > 0) { best = r; bestRank = rank; }
     }
     return best;

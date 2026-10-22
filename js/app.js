@@ -13,7 +13,7 @@
     ['efectivo', 'Efectivo'], ['transferencia', 'Transferencia'], ['debito', 'Débito'],
     ['credito', 'Crédito'], ['mercadopago', 'Mercado Pago'],
   ];
-  const nombreMedio = (m) => (MEDIOS.find((x) => x[0] === m) || [m, m])[1];
+  const nombreMedio = (m) => (m === 'giftcard' ? 'Gift card' : (MEDIOS.find((x) => x[0] === m) || [m, m])[1]);
 
   const LS = {
     get(k, d) { try { const v = localStorage.getItem('mek.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -53,6 +53,7 @@
     turno: null,               // el turno que se está cobrando en el ticket
     parcial: null,             // "pagó una parte": {medio, monto}
     nombreOcasional: '',       // nombre libre cuando es "sin ficha"
+    giftcards: LS.get('giftcards', []),   // gift cards con saldo (v_gift_cards)
   };
 
   // Clienta sin ficha en el dashboard (sql/09_correcciones.sql).
@@ -140,15 +141,18 @@
   // Si todavía no se corrió 11_cobros_directos.sql, venta_pagos no tiene
   // cuenta/profesional_id: se piden sin esas columnas.
   let pagosConDestino = true;
+  let conGift = true;   // venta_pagos.gift_card_id (12_giftcards_y_controles.sql)
   async function cargarVentas() {
     try { await cargarVentasCon(pagosConDestino); } catch (e) {
+      if (conGift && /gift_card_id/.test(e.message || '')) { conGift = false; return cargarVentas(); }
       if (pagosConDestino && /cuenta|profesional_id/.test(e.message || '')) { pagosConDestino = false; return cargarVentasCon(false); }
       throw e;
     }
   }
   async function cargarVentasCon(destino) {
     const sel = 'id,fecha,paciente_ref,estado,medio_pago,nota,creado_por,client_id,a_deudores_en,' +
-                'pacientes(nombre),venta_items(tipo,descripcion,precio_cobrado),venta_pagos(medio,monto' + (destino ? ',cuenta,profesional_id' : '') + ')';
+                'pacientes(nombre),venta_items(tipo,descripcion,precio_cobrado,profesional_id),venta_pagos(medio,monto' +
+                (destino ? ',cuenta,profesional_id' + (conGift ? ',gift_card_id' : '') : '') + ')';
     const [h, p, s] = await Promise.all([
       sb.from('ventas').select(sel).eq('fecha', S.fecha).order('id', { ascending: false }),
       sb.from('ventas').select(sel).eq('estado', 'pendiente').order('fecha').order('id'),
@@ -195,11 +199,20 @@
     LS.set('turnos', S.turnos);
   }
 
+  // Gift cards con saldo, para pagar con ellas (12_giftcards_y_controles.sql).
+  async function cargarGiftcards() {
+    if (!navigator.onLine) return;
+    const { data, error } = await sb.from('v_gift_cards').select('id,beneficiaria,paciente_ref,descripcion,saldo,vence,anulada_en');
+    if (error) return;   // sin el 12 todavía: no hay gift cards
+    S.giftcards = data.filter((g) => !g.anulada_en && Number(g.saldo) > 0 && (!g.vence || g.vence >= S.fecha));
+    LS.set('giftcards', S.giftcards);
+  }
+
   async function refrescar() {
     if (!navigator.onLine) { render(); return; }
     try {
       await window.Cola.procesar(sb);
-      await Promise.all([cargarCatalogo(), cargarVentas(), cargarTurnos()]);
+      await Promise.all([cargarCatalogo(), cargarVentas(), cargarTurnos(), cargarGiftcards()]);
     } catch (e) {
       toast('No se pudo actualizar: ' + (e.message || e), 'error');
     }
@@ -269,7 +282,7 @@
     render();
     if (!navigator.onLine) return;
     try {
-      await Promise.all([cargarCatalogo(), cargarPacientesEspejo(), cargarVentas()]);
+      await Promise.all([cargarCatalogo(), cargarPacientesEspejo(), cargarVentas(), cargarGiftcards()]);
     } catch (e) {
       toast('No se pudo cargar todo: ' + (e.message || e), 'error');
     }
@@ -371,14 +384,17 @@
       '</div>';
   }
 
-  function htmlPagos(pagos, total, prefijo) {
+  // pacRef: de quién es la venta, para mostrar primero sus gift cards.
+  function htmlPagos(pagos, total, prefijo, pacRef) {
+    const medios = MEDIOS.concat(S.giftcards.length ? [['giftcard', '🎁 Gift card']] : []);
     const filas = pagos.map((p, i) => {
       const ultimo = i === pagos.length - 1 && pagos.length > 1;
       return '<div class="pago">' +
-        '<div class="medios">' + MEDIOS.map(([k, n]) =>
+        '<div class="medios">' + medios.map(([k, n]) =>
           '<button type="button" class="medio' + (p.medio === k ? ' activo' : '') + '" data-' + prefijo + 'medio="' + i +
           '" data-valor="' + k + '">' + n + '</button>').join('') + '</div>' +
-        htmlDestino(p, 'data-' + prefijo + 'destino="' + i + '"') +
+        (p.medio === 'giftcard' ? htmlGift(p, 'data-' + prefijo + 'gift="' + i + '"', pacRef)
+                                : htmlDestino(p, 'data-' + prefijo + 'destino="' + i + '"')) +
         (pagos.length > 1 ? '<label class="monto">$ <input type="number" inputmode="decimal" min="0" data-' + prefijo +
           'monto="' + i + '" value="' + (p.monto == null ? '' : p.monto) + '"' + (ultimo ? ' readonly title="Se calcula solo: lo que falta"' : '') +
           '></label>' + '<button type="button" class="link" data-' + prefijo + 'sacar="' + i + '">sacar</button>' : '') +
@@ -398,7 +414,18 @@
       (p.medio === 'transferencia' ? 'Fue a ' : 'Recibió ') +
       '<select ' + attr + '>' + window.MEK.opcionesDestino(p.medio, p.destino || '', profs) + '</select></label>';
   }
-  const pagoPayload = (x) => Object.assign({ medio: x.medio, monto: Number(x.monto) }, window.MEK.destinoAPago(x.destino || ''));
+  // Qué gift card: primero las de esta paciente.
+  function htmlGift(p, attr, pacRef) {
+    const cards = S.giftcards.slice().sort((a, b) => (b.paciente_ref === pacRef) - (a.paciente_ref === pacRef) || a.beneficiaria.localeCompare(b.beneficiaria));
+    const g = S.giftcards.find((x) => x.id === p.gift);
+    return '<label class="destino' + (!p.gift ? ' falta' : '') + '">Cuál <select ' + attr + '><option value="">— elegir —</option>' +
+      cards.map((c) => '<option value="' + c.id + '"' + (c.id === p.gift ? ' selected' : '') + '>' + esc(c.beneficiaria) +
+        (c.descripcion ? ' · ' + esc(c.descripcion) : '') + ' · le quedan ' + plata(c.saldo) + '</option>').join('') + '</select></label>' +
+      (g && Number(p.monto) > Number(g.saldo) ? '<div class="aviso">Le quedan ' + plata(g.saldo) + ': tocá "Pagó con dos medios" y poné el resto en otro medio.</div>' : '');
+  }
+  const pagoPayload = (x) => (x.medio === 'giftcard'
+    ? { medio: 'giftcard', monto: Number(x.monto), gift_card_id: x.gift }
+    : Object.assign({ medio: x.medio, monto: Number(x.monto) }, window.MEK.destinoAPago(x.destino || '')));
 
   // En pagos divididos, el último medio se completa con lo que falta.
   function ajustarPagos(pagos, total) {
@@ -411,6 +438,12 @@
     if (total === 0) return null;
     if (pagos.some((p) => !p.medio)) return 'Elegí el medio de pago';
     if (pagos.some((p) => p.medio === 'transferencia' && !p.destino)) return 'Elegí a qué cuenta fue la transferencia';
+    if (pagos.some((p) => p.medio === 'giftcard' && !p.gift)) return 'Elegí qué gift card usa';
+    for (const p of pagos.filter((x) => x.medio === 'giftcard')) {
+      const g = S.giftcards.find((x) => x.id === p.gift);
+      const usa = pagos.filter((x) => x.medio === 'giftcard' && x.gift === p.gift).reduce((a, x) => a + Number(x.monto), 0);
+      if (g && usa > Number(g.saldo)) return 'A la gift card le quedan ' + plata(g.saldo) + ': poné el resto en otro medio';
+    }
     if (pagos.some((p) => !(Number(p.monto) > 0))) return 'Hay un pago sin monto o negativo';
     const suma = C.r2(pagos.reduce((a, p) => a + Number(p.monto), 0));
     if (suma !== total) return 'Los pagos suman ' + plata(suma) + ' y el total es ' + plata(total);
@@ -450,7 +483,7 @@
 
     el.innerHTML = htmlTurnoTicket() + filas.map(htmlItem).join('') +
       '<div class="total"><span>Total</span><b>' + plata(total) + '</b></div>' +
-      (total > 0 && !pa ? '<div class="pagos">' + htmlPagos(S.pagos, total, 't') + '</div>' : '') +
+      (total > 0 && !pa ? '<div class="pagos">' + htmlPagos(S.pagos, total, 't', S.paciente && S.paciente.ref) + '</div>' : '') +
       (pa ? '<div class="pagos parcial"><b>Pagó una parte</b>' +
         '<div class="medios">' + MEDIOS.map(([k, n]) => '<button type="button" class="medio' + (pa.medio === k ? ' activo' : '') +
           '" data-pmedio="' + k + '">' + n + '</button>').join('') + '</div>' +
@@ -647,7 +680,7 @@
     if (!h.ventas.length) return '<div class="historial tenue">Primera vez que se le cobra en el sistema.</div>';
     return '<div class="historial"><b>Últimas visitas</b>' + h.ventas.map((v) =>
       '<div class="linea' + (v.estado === 'anulada' ? ' tenue' : '') + '"><span>' + C.fechaCorta(v.fecha) + ' · ' +
-      esc(v.venta_items.map((i) => i.descripcion).join(' + ')) + (v.estado === 'pendiente' ? ' <b class="error">sin cobrar</b>' : '') +
+      esc(v.venta_items.map((i) => i.descripcion + quienLoHizo(i.profesional_id)).join(' + ')) + (v.estado === 'pendiente' ? ' <b class="error">sin cobrar</b>' : '') +
       (v.estado === 'anulada' ? ' (anulada)' : '') + '</span><span>' +
       plata(v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0)) + '</span></div>').join('') + '</div>';
   }
@@ -656,7 +689,7 @@
     if (!navigator.onLine) { S.historial = null; return; }
     S.historial = { ref, cargando: true, ventas: [] };
     renderPaciente();
-    const { data, error } = await sb.from('ventas').select('id,fecha,estado,venta_items(descripcion,precio_cobrado)')
+    const { data, error } = await sb.from('ventas').select('id,fecha,estado,venta_items(descripcion,precio_cobrado,profesional_id)')
       .eq('paciente_ref', ref).order('fecha', { ascending: false }).order('id', { ascending: false }).range(0, 5);
     if (!S.historial || S.historial.ref !== ref) return;
     S.historial = error ? null : { ref, ventas: data };
@@ -765,14 +798,21 @@
   // ------------------------------------------------------------------
   function ventasEnCola() {
     return window.Cola.leer().filter((o) => o.tipo === 'venta').map((o) => ({
-      client_id: o.payload.client_id, fecha: o.payload.fecha, estado: o.payload.estado,
+      client_id: o.payload.client_id, fecha: o.payload.fecha, estado: o.payload.estado, paciente_ref: o.payload.paciente_ref,
       pacienteNombre: o.payload.paciente ? o.payload.paciente.nombre : o.payload.paciente_ref,
-      descripcion: o.payload.items.map((i) => descItem(i)).join(' + '),
+      descripcion: o.payload.items.map((i) => descItem(i) + quienLoHizo(i.profesional_id)).join(' + '),
       total: o.payload.items.reduce((a, i) => a + (i.tipo === 'pack_sesion' ? 0 : Number(i.precio_cobrado) || 0), 0) -
              (o.payload.entrega || []).reduce((a, p) => a + Number(p.monto), 0),
       pagos: o.payload.estado === 'pendiente' ? (o.payload.entrega || []) : (o.payload.pagos || []),
       enCola: true, error: o.error,
     }));
+  }
+
+  // " (Yael)": quién hizo el ítem, para ver de un vistazo si se cargó bien.
+  function quienLoHizo(profId) {
+    if (!profId || !S.cat) return '';
+    const p = S.cat.profesionales.find((x) => x.id === profId);
+    return p ? ' (' + p.nombre.split(' ')[0] + ')' : '';
   }
 
   function descItem(i) {
@@ -781,11 +821,11 @@
   }
 
   const deServidor = (v) => ({
-    id: v.id, client_id: v.client_id, fecha: v.fecha, estado: v.estado, medio: v.medio_pago,
+    id: v.id, client_id: v.client_id, fecha: v.fecha, estado: v.estado, medio: v.medio_pago, paciente_ref: v.paciente_ref,
     pacienteNombre: v.paciente_ref === OCASIONAL
       ? ((/Nombre: ([^·|]+)/.exec(v.nota || '') || [])[1] || '').trim().concat(' (sin ficha)').trim()
       : v.pacientes ? v.pacientes.nombre : v.paciente_ref,
-    descripcion: v.venta_items.map((i) => i.descripcion).join(' + '),
+    descripcion: v.venta_items.map((i) => i.descripcion + quienLoHizo(i.profesional_id)).join(' + '),
     // En una deuda con pagos a cuenta, lo que falta (lo que se cobra ahora).
     total: v.venta_items.reduce((a, i) => a + Number(i.precio_cobrado), 0) -
            (v.estado === 'pendiente' ? (v.venta_pagos || []).reduce((a, p) => a + Number(p.monto), 0) : 0),
@@ -814,7 +854,7 @@
         '<div class="tenue">' + (v.fecha === hoy() ? 'hoy' : C.fechaCorta(v.fecha)) + (v.enCola ? ' · sin sincronizar' : '') +
         '</div></div><b>' + plata(v.total) + '</b></div>' +
         (abierto
-          ? '<div class="pagos">' + htmlPagos(S.pagosPendiente, v.total, 'b') + '</div>' +
+          ? '<div class="pagos">' + htmlPagos(S.pagosPendiente, v.total, 'b', v.paciente_ref) + '</div>' +
             '<div class="acciones fila"><button type="button" class="primario" data-cobrarpend="' + key + '">Cobrar ' +
             plata(v.total) + '</button><button type="button" class="link" data-cerrarpend>cancelar</button></div>'
           : '<div class="acciones fila"><button type="button" class="primario" data-abrirpend="' + key + '">Cobrar</button>' +
@@ -929,11 +969,14 @@
     const el = $('#hoy');
     if (!lista.length) { el.innerHTML = '<p class="tenue">Todavía nada.</p>'; return; }
     // Lo que recibió directo una profesional no entró a MEK: va aparte.
-    const sumaPagos = (v, directo) => (v.pagos || []).filter((p) => !!p.profesional_id === directo).reduce((s, p) => s + Number(p.monto), 0);
+    // Con gift card tampoco es plata nueva: entró cuando se vendió.
+    const fuera = (p) => !!p.profesional_id || p.medio === 'giftcard';
+    const sumaPagos = (v, f) => (v.pagos || []).filter(f).reduce((s, p) => s + Number(p.monto), 0);
     const validas = lista.filter((v) => v.estado !== 'anulada');
-    const directo = validas.reduce((a, v) => a + sumaPagos(v, true), 0);
-    const cobrado = validas.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total - sumaPagos(v, true), 0) +
-      validas.filter((v) => v.estado === 'pendiente').reduce((a, v) => a + sumaPagos(v, false), 0);
+    const directo = validas.reduce((a, v) => a + sumaPagos(v, (p) => !!p.profesional_id), 0);
+    const pagadoGift = validas.reduce((a, v) => a + sumaPagos(v, (p) => p.medio === 'giftcard'), 0);
+    const cobrado = validas.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total - sumaPagos(v, fuera), 0) +
+      validas.filter((v) => v.estado === 'pendiente').reduce((a, v) => a + sumaPagos(v, (p) => !fuera(p)), 0);
     // Las anuladas no suman en nada (caja, comisiones, liquidaciones):
     // quedan guardadas solo como registro, plegadas al final.
     const fila = (v) => {
@@ -956,7 +999,8 @@
     };
     const anuladas = lista.filter((v) => v.estado === 'anulada');
     el.innerHTML = '<div class="tenue">Cobrado (bruto, caja): <b>' + plata(C.r2(cobrado)) + '</b>' +
-      (directo ? ' · cobrado directo por profesionales: <b>' + plata(C.r2(directo)) + '</b>' : '') + '</div>' +
+      (directo ? ' · cobrado directo por profesionales: <b>' + plata(C.r2(directo)) + '</b>' : '') +
+      (pagadoGift ? ' · con gift card: <b>' + plata(C.r2(pagadoGift)) + '</b>' : '') + '</div>' +
       lista.filter((v) => v.estado !== 'anulada').map(fila).join('') +
       (anuladas.length ? '<details class="anuladas"><summary>' + anuladas.length + (anuladas.length === 1 ? ' anulada' : ' anuladas') +
         ' (no cuentan para nada, quedan solo como registro)</summary>' + anuladas.map(fila).join('') + '</details>' : '');
@@ -1020,7 +1064,7 @@
     if (antes !== undefined && window.Cola.leer().length === antes) { renderSync(); return; }
     clearTimeout(refrescoPendiente);
     refrescoPendiente = setTimeout(async () => {
-      try { await Promise.all([cargarVentas(), cargarPacks(), marcarCobrados()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
+      try { await Promise.all([cargarVentas(), cargarPacks(), marcarCobrados(), cargarGiftcards()]); } catch (e) { /* se reintenta en el próximo ciclo */ }
       render();
     }, 300);
   }
@@ -1028,6 +1072,13 @@
   function buscarVentaKey(key) {
     const [t, v] = key.split(/:(.+)/);
     return t === 'id' ? { venta_id: Number(v) } : { client_id: v };
+  }
+
+  function buscarVentaPend(key) {
+    if (!key) return null;
+    const k = buscarVentaKey(key);
+    return ventasEnCola().concat(S.pendientes.map(deServidor))
+      .find((x) => (k.venta_id && x.id === k.venta_id) || (k.client_id && x.client_id === k.client_id)) || null;
   }
 
   function totalDeKey(key) {
@@ -1122,6 +1173,13 @@
         pg.medio = d.valor;
         // Las cuentas (alias/QR) son solo de transferencias.
         if (pg.destino && !pg.destino.startsWith('p:') && d.valor !== 'transferencia') pg.destino = '';
+        if (d.valor === 'giftcard') {
+          pg.destino = '';
+          // Si la paciente tiene una sola gift card, va esa.
+          const ref = pre === 't' ? S.paciente && S.paciente.ref : (buscarVentaPend(S.cobrandoPendiente) || {}).paciente_ref;
+          const suyas = S.giftcards.filter((g) => g.paciente_ref && g.paciente_ref === ref);
+          if (!pg.gift && suyas.length === 1) pg.gift = suyas[0].id;
+        } else pg.gift = null;
         pre === 't' ? renderTicket() : renderBandeja();
         return;
       }
@@ -1219,6 +1277,8 @@
     if (t.id === 'nota') { S.nota = t.value; return; }
     if (t.id === 'nombreOcasional') { S.nombreOcasional = t.value; return; }
     if (d.tdestino !== undefined) { S.pagos[Number(d.tdestino)].destino = t.value; renderTicket(); return; }
+    if (d.tgift !== undefined) { S.pagos[Number(d.tgift)].gift = t.value ? Number(t.value) : null; renderTicket(); return; }
+    if (d.bgift !== undefined) { S.pagosPendiente[Number(d.bgift)].gift = t.value ? Number(t.value) : null; renderBandeja(); return; }
     if (d.bdestino !== undefined) { S.pagosPendiente[Number(d.bdestino)].destino = t.value; renderBandeja(); return; }
     if (t.id === 'parcialDestino') { S.parcial.destino = t.value; renderTicket(); return; }
     if (t.id === 'parcialMonto') {

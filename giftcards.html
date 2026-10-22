@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MEK · Gift cards</title>
+  <meta name="theme-color" content="#7a2e4f">
+  <link rel="preconnect" href="https://qemrmkwpsdiacaicedny.supabase.co">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">MEK</div>
+    <nav id="nav" class="nav" hidden></nav>
+    <div class="usuario"><span id="usuarioNombre"></span><button type="button" id="salir" class="chico">Salir</button></div>
+  </header>
+
+  <main class="pagina">
+    <section class="card">
+      <div class="titulo-fila">
+        <h2>Gift cards</h2>
+        <div class="fila">
+          <input type="search" id="buscar" placeholder="Buscar por nombre…" style="max-width:240px">
+          <label class="fila tenue"><input type="checkbox" id="usadas"> ver las ya usadas</label>
+          <button type="button" class="primario" id="nueva">+ Nueva gift card</button>
+        </div>
+      </div>
+      <p class="explica">Cuando se vende, la plata entra a la caja ese día. Después, cada vez que viene, se cobra en <a href="index.html">Cobro</a>
+        eligiendo el medio <b>🎁 Gift card</b>: se descuenta del saldo y queda anotado qué se hizo y cuándo. Si sale más de lo que le queda, se paga el resto con otro medio.</p>
+      <div id="form"></div>
+      <div id="resumen" class="kpis"></div>
+    </section>
+    <div id="lista"></div>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/comun.js"></script>
+  <script src="js/cola.js"></script>
+  <script src="js/giftcards.js"></script>
+</body>
+</html>

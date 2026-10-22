@@ -290,3 +290,7 @@ details.anuladas summary { cursor: pointer; color: var(--suave, #777); padding: 
 .destino { display: flex; align-items: center; gap: 6px; font-size: .9rem; margin-top: 6px; }
 .destino select { width: auto; min-height: 36px; padding: 4px 8px; }
 .destino.falta select { border-color: var(--mal); }
+
+/* Situación de cada atención (Liquidaciones) */
+.tabla .ok { color: #1f7a4a; }
+

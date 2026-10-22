@@ -52,6 +52,20 @@
     </section>
 
     <section class="card">
+      <h2>Quién atendió a quién</h2>
+      <p class="explica">Todas las atenciones del período, con quién figura que la hizo y por qué entra o no en su liquidación.
+        Sirve para encontrar errores de carga (ej. figura Silvia y la hizo Yael): se corrigen con <b>“no lo hizo…”</b> en el detalle de la liquidación.</p>
+      <div class="form">
+        <label>Desde <input type="date" id="atDesde"></label>
+        <label>Hasta <input type="date" id="atHasta"></label>
+        <label>Profesional <select id="atProf"><option value="">Todas</option></select></label>
+        <label>Paciente <input type="search" id="atBuscar" placeholder="Nombre (opcional)"></label>
+        <div><button type="button" class="primario" id="atVer">Buscar</button></div>
+      </div>
+      <div id="atenciones"></div>
+    </section>
+
+    <section class="card">
       <h2>Liquidaciones cerradas</h2>
       <div class="tabla-wrap"><table class="tabla" id="historial"></table></div>
       <div id="detalle"></div>

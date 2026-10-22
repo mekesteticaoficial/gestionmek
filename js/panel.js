@@ -33,7 +33,9 @@
     if (!caja.error && caja.data) {
       const c = caja.data;
       data.medios = c.medios;
-      data.caja.entradas = M.r2(Number(c.cobros) + Number(c.prestamos));
+      data.caja.de_profesionales = Number(c.de_profesionales || 0);
+      data.caja.directo = c.directo || [];
+      data.caja.entradas = M.r2(Number(c.cobros) + Number(c.prestamos) + data.caja.de_profesionales);
       data.caja.movimiento = M.r2(data.caja.entradas - Number(data.caja.salidas));
       data.caja.a_cuenta = c.a_cuenta;
       data.caja.prestamos = c.prestamos;
@@ -82,10 +84,15 @@
         '<p class="explica">Las sesiones de pack no traen plata (se cobró al vender el pack); muestran la comisión que generan cuando se usan.</p></section>' +
 
       '<section class="card"><h2>Caja por medio de pago</h2><div class="tabla-wrap"><table class="tabla"><tbody>' +
-        (d.medios.length ? d.medios.map((m) => '<tr><td>' + M.esc(M.nombreMedio(m.medio)) + '</td><td class="num">' + P(m.monto) + '</td></tr>').join('') +
+        (d.medios.length ? d.medios.map((m) => '<tr><td>' + M.esc(M.nombreMedio(m.medio)) +
+            (m.cuenta ? ' <span class="tenue">' + M.esc(M.textoDestino({ medio: m.medio, cuenta: m.cuenta })) + '</span>' : '') +
+            '</td><td class="num">' + P(m.monto) + '</td></tr>').join('') +
           (Number(c.prestamos) ? '<tr><td>Préstamos que entraron</td><td class="num">' + P(c.prestamos) + '</td></tr>' : '') +
+          (c.de_profesionales ? '<tr><td>Lo que pagaron profesionales que debían</td><td class="num">' + P(c.de_profesionales) + '</td></tr>' : '') +
           '<tr class="total"><td>Total</td><td class="num">' + P(c.entradas) + '</td></tr>' : '<tr><td class="tenue">Sin pagos.</td></tr>') +
         (Number(c.a_cuenta) ? '<tr><td colspan="2" class="tenue">Incluye ' + P(c.a_cuenta) + ' de pagos a cuenta de deudoras.</td></tr>' : '') +
+        ((c.directo || []).length ? '<tr><td colspan="2" class="tenue">No entraron a MEK (los cobraron directo y se les descuenta en la liquidación): ' +
+          c.directo.map((x) => M.esc(x.profesional) + ' ' + P(x.monto)).join(' · ') + '</td></tr>' : '') +
         '</tbody></table></div>' +
         '<h2 style="margin-top:16px">Por profesional</h2><div class="tabla-wrap"><table class="tabla"><thead><tr><th>Profesional</th><th class="num">Atenc.</th>' +
         '<th class="num">Cobrado</th><th class="num">Comisión / su parte</th></tr></thead><tbody>' +

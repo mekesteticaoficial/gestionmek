@@ -19,6 +19,34 @@
   ];
   const nombreMedio = (m) => (MEDIOS.find((x) => x[0] === m) || [m, m || '—'])[1];
 
+  // A quién le llegó la plata (sql/11_cobros_directos.sql). destino:
+  // 'franco' | 'silvia' | 'qr' (cuentas de MEK), 'p:<id>' (una profesional
+  // que recibe pagos: no entra a MEK y se le descuenta) o '' (MEK).
+  const CUENTAS = [['franco', 'Alias Franco'], ['silvia', 'Alias Silvia'], ['qr', 'QR']];
+  const primerNombre = (n) => String(n || '').split(' ')[0];
+  function opcionesDestino(medio, destino, profs) {
+    const rec = (profs || []).filter((p) => p.recibe_pagos);
+    const op = (v, t) => '<option value="' + v + '"' + (destino === v ? ' selected' : '') + '>' + esc(t) + '</option>';
+    if (medio === 'transferencia') {
+      return op('', '— ¿a qué cuenta? —') + CUENTAS.map(([k, t]) => op(k, t)).join('') +
+        rec.map((p) => op('p:' + p.id, 'Alias ' + primerNombre(p.nombre) + ' (se le descuenta)')).join('');
+    }
+    return op('', 'Entró a MEK') + rec.map((p) => op('p:' + p.id, 'Lo cobró ' + primerNombre(p.nombre))).join('');
+  }
+  function destinoAPago(destino) {
+    if (!destino) return {};
+    if (destino.startsWith('p:')) return { profesional_id: Number(destino.slice(2)) };
+    return { cuenta: destino };
+  }
+  function textoDestino(pago, profs) {
+    if (pago.profesional_id) {
+      const p = (profs || []).find((x) => x.id === pago.profesional_id);
+      return (pago.medio === 'transferencia' ? 'a ' : 'lo cobró ') + (p ? primerNombre(p.nombre) : 'una profesional');
+    }
+    const c = CUENTAS.find(([k]) => k === pago.cuenta);
+    return c ? c[1].replace('Alias ', 'a ') : '';
+  }
+
   const hoy = () => new Date().toLocaleDateString('en-CA');
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -156,7 +184,7 @@
   }
 
   window.MEK = {
-    sb, LS, MEDIOS, nombreMedio, hoy, esc, norm, plata, fechaCorta, r2, numero,
+    sb, LS, MEDIOS, nombreMedio, CUENTAS, opcionesDestino, destinoAPago, textoDestino, hoy, esc, norm, plata, fechaCorta, r2, numero,
     nav, usuarioActual, requerirSesion, toast, mensaje, leerTodo, salirBoton,
   };
 })();

@@ -97,7 +97,8 @@
   // siempre cobrada. El nombre, si lo dicen, queda en la nota.
   const OCASIONAL = { ref: 'x_ocasional', nombre: 'Sin ficha (ocasional)', telefono: null, email: null };
   let cabinas = M.LS.get('cabinas_sueltas', []);
-  const vacia = () => ({ id: null, precio: null, medio: null, nombre: '', paciente: null, buscar: '' });
+  let profs = M.LS.get('profs_pagos', []);   // para "¿a qué cuenta fue?"
+  const vacia = () => ({ id: null, precio: null, medio: null, destino: '', nombre: '', paciente: null, buscar: '' });
   let suelta = vacia();
   // Pacientes del espejo (las mismas que en Cobro). Un pack sí necesita
   // a alguien con ficha: tiene que quedar a su nombre.
@@ -117,11 +118,13 @@
 
   async function cargarCabinas() {
     try {
-      const [t, p] = await Promise.all([
+      const [t, p, pr] = await Promise.all([
         sb.from('tratamientos').select('id,nombre,categoria,pack_sesiones,activo').eq('categoria', 'cabina').eq('activo', true).order('nombre'),
         sb.from('precios_tratamiento').select('tratamiento_id,precio,vigente_desde'),
+        sb.from('profesionales').select('*').eq('activo', true),
       ]);
       if (t.error || p.error) throw t.error || p.error;
+      if (!pr.error) { profs = pr.data; M.LS.set('profs_pagos', profs); }
       const hoy = M.hoy();
       const min = (n) => parseInt(n.replace(/\D+/g, ' ').trim(), 10) || 0;
       cabinas = t.data.map((x) => {
@@ -154,6 +157,9 @@
         '<label>Cobrado $ <input type="number" id="sueltaPrecio" min="0" step="1" inputmode="decimal" value="' + (suelta.precio == null ? '' : suelta.precio) + '"></label></div>' +
         '<div class="medios" style="margin-top:8px">' + M.MEDIOS.map(([k, n]) => '<button type="button" class="medio' + (suelta.medio === k ? ' activo' : '') +
           '" data-sueltamedio="' + k + '">' + n + '</button>').join('') + '</div>' +
+        (suelta.medio && (suelta.medio === 'transferencia' || profs.some((x) => x.recibe_pagos))
+          ? '<label class="destino" style="margin-top:8px;display:block">' + (suelta.medio === 'transferencia' ? 'Fue a ' : 'Recibió ') +
+            '<select id="sueltaDestino">' + M.opcionesDestino(suelta.medio, suelta.destino, profs) + '</select></label>' : '') +
         '<div class="acciones fila"><button type="button" class="primario" id="sueltaGuardar">Registrar ' + M.esc(elegida.nombre) + '</button>' +
         '<button type="button" class="link" id="sueltaCancelar">cancelar</button></div>' : '');
   }
@@ -170,6 +176,7 @@
     if ($('#sueltaPrecio')) suelta.precio = M.numero($('#sueltaPrecio').value);
     if ($('#sueltaNombre')) suelta.nombre = $('#sueltaNombre').value;
     if ($('#sueltaBuscar')) suelta.buscar = $('#sueltaBuscar').value;
+    if ($('#sueltaDestino')) suelta.destino = $('#sueltaDestino').value;
   }
 
   function guardarSuelta() {
@@ -179,10 +186,11 @@
     const nombre = (suelta.nombre || '').trim();
     if (!(precio > 0)) { M.toast('Falta lo que pagó', 'error'); return; }
     if (!suelta.medio) { M.toast('Elegí con qué pagó', 'error'); return; }
+    if (suelta.medio === 'transferencia' && !suelta.destino) { M.toast('Elegí a qué cuenta fue la transferencia', 'error'); return; }
     if (c.pack && !suelta.paciente) { M.toast('La promo tiene que quedar a nombre de una paciente con ficha', 'error'); return; }
     const pac = suelta.paciente || OCASIONAL;
     window.Cola.agregar('venta', { fecha: M.hoy(), paciente_ref: pac.ref, paciente: pac, estado: 'cobrada',
-      pagos: [{ medio: suelta.medio, monto: precio }], nota: !suelta.paciente && nombre ? 'Nombre: ' + nombre : null,
+      pagos: [Object.assign({ medio: suelta.medio, monto: precio }, M.destinoAPago(suelta.destino))], nota: !suelta.paciente && nombre ? 'Nombre: ' + nombre : null,
       items: [{ tipo: c.pack ? 'pack_venta' : 'cabina', tratamiento_id: c.id, cantidad: 1, precio_cobrado: precio }] });
     M.toast(c.nombre + (c.pack ? ' vendida a ' + pac.nombre + ': aparece abajo para ir usando las sesiones' : ' registrada') + ' · ' + M.plata(precio) +
       (navigator.onLine ? '' : ' (sin conexión: se sube sola)'), 'ok', c.pack ? 6000 : null);
@@ -204,7 +212,12 @@
       suelta.id = c.id; suelta.precio = c.precio;
       renderSuelta();
     }
-    if (t.dataset.sueltamedio) { leerForm(); suelta.medio = t.dataset.sueltamedio; renderSuelta(); }
+    if (t.dataset.sueltamedio) {
+      leerForm();
+      suelta.medio = t.dataset.sueltamedio;
+      if (suelta.destino && !suelta.destino.startsWith('p:') && suelta.medio !== 'transferencia') suelta.destino = '';
+      renderSuelta();
+    }
     if (t.dataset.sueltapac) { leerForm(); suelta.paciente = pacientes.find((p) => p.ref === t.dataset.sueltapac); suelta.buscar = ''; renderSuelta(); }
     if (t.id === 'sueltaOtra') { leerForm(); suelta.paciente = null; renderSuelta(); $('#sueltaBuscar').focus(); }
     if (t.id === 'sueltaGuardar') guardarSuelta();

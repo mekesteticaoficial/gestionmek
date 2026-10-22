@@ -137,9 +137,18 @@
     }
   }
 
+  // Si todavía no se corrió 11_cobros_directos.sql, venta_pagos no tiene
+  // cuenta/profesional_id: se piden sin esas columnas.
+  let pagosConDestino = true;
   async function cargarVentas() {
+    try { await cargarVentasCon(pagosConDestino); } catch (e) {
+      if (pagosConDestino && /cuenta|profesional_id/.test(e.message || '')) { pagosConDestino = false; return cargarVentasCon(false); }
+      throw e;
+    }
+  }
+  async function cargarVentasCon(destino) {
     const sel = 'id,fecha,paciente_ref,estado,medio_pago,nota,creado_por,client_id,a_deudores_en,' +
-                'pacientes(nombre),venta_items(tipo,descripcion,precio_cobrado),venta_pagos(medio,monto)';
+                'pacientes(nombre),venta_items(tipo,descripcion,precio_cobrado),venta_pagos(medio,monto' + (destino ? ',cuenta,profesional_id' : '') + ')';
     const [h, p, s] = await Promise.all([
       sb.from('ventas').select(sel).eq('fecha', S.fecha).order('id', { ascending: false }),
       sb.from('ventas').select(sel).eq('estado', 'pendiente').order('fecha').order('id'),
@@ -175,9 +184,14 @@
   async function marcarCobrados() {
     const refs = S.turnos.lista.map((t) => t.ref);
     if (!refs.length || !navigator.onLine) { LS.set('turnos', S.turnos); return; }
-    const { data, error } = await sb.from('ventas').select('turno_ref').in('turno_ref', refs).neq('estado', 'anulada');
+    const [{ data, error }, desc] = await Promise.all([
+      sb.from('ventas').select('turno_ref').in('turno_ref', refs).neq('estado', 'anulada'),
+      sb.from('turnos_descartados').select('turno_ref,restaurado_en').in('turno_ref', refs),
+    ]);
     if (error) throw error;
     S.turnos.cobrados = data.map((v) => v.turno_ref);
+    // Sacados a mano de la lista (si falta 11_cobros_directos.sql, no hay).
+    S.turnos.descartados = desc.error ? [] : desc.data.filter((x) => !x.restaurado_en).map((x) => x.turno_ref);
     LS.set('turnos', S.turnos);
   }
 
@@ -364,6 +378,7 @@
         '<div class="medios">' + MEDIOS.map(([k, n]) =>
           '<button type="button" class="medio' + (p.medio === k ? ' activo' : '') + '" data-' + prefijo + 'medio="' + i +
           '" data-valor="' + k + '">' + n + '</button>').join('') + '</div>' +
+        htmlDestino(p, 'data-' + prefijo + 'destino="' + i + '"') +
         (pagos.length > 1 ? '<label class="monto">$ <input type="number" inputmode="decimal" min="0" data-' + prefijo +
           'monto="' + i + '" value="' + (p.monto == null ? '' : p.monto) + '"' + (ultimo ? ' readonly title="Se calcula solo: lo que falta"' : '') +
           '></label>' + '<button type="button" class="link" data-' + prefijo + 'sacar="' + i + '">sacar</button>' : '') +
@@ -372,6 +387,18 @@
     return filas + '<button type="button" class="link" data-' + prefijo + 'dividir>' +
       (pagos.length > 1 ? '+ otro medio' : 'Pagó con dos medios') + '</button>';
   }
+
+  // ¿A quién le llegó? Obligatorio en transferencias; en los demás medios,
+  // solo si hay profesionales que cobran (Juan Cruz, Daniela, Yael).
+  function htmlDestino(p, attr) {
+    if (!p.medio || !S.cat) return '';
+    const profs = S.cat.profesionales || [];
+    if (p.medio !== 'transferencia' && !profs.some((x) => x.recibe_pagos)) return '';
+    return '<label class="destino' + (p.medio === 'transferencia' && !p.destino ? ' falta' : '') + '">' +
+      (p.medio === 'transferencia' ? 'Fue a ' : 'Recibió ') +
+      '<select ' + attr + '>' + window.MEK.opcionesDestino(p.medio, p.destino || '', profs) + '</select></label>';
+  }
+  const pagoPayload = (x) => Object.assign({ medio: x.medio, monto: Number(x.monto) }, window.MEK.destinoAPago(x.destino || ''));
 
   // En pagos divididos, el último medio se completa con lo que falta.
   function ajustarPagos(pagos, total) {
@@ -383,6 +410,7 @@
   function validarPagos(pagos, total) {
     if (total === 0) return null;
     if (pagos.some((p) => !p.medio)) return 'Elegí el medio de pago';
+    if (pagos.some((p) => p.medio === 'transferencia' && !p.destino)) return 'Elegí a qué cuenta fue la transferencia';
     if (pagos.some((p) => !(Number(p.monto) > 0))) return 'Hay un pago sin monto o negativo';
     const suma = C.r2(pagos.reduce((a, p) => a + Number(p.monto), 0));
     if (suma !== total) return 'Los pagos suman ' + plata(suma) + ' y el total es ' + plata(total);
@@ -415,7 +443,9 @@
     if (ocasional || total <= 0) S.parcial = null;
     const pa = S.parcial;
     const debe = pa && Number(pa.monto) > 0 ? C.r2(total - Number(pa.monto)) : null;
-    const errParcial = pa && (!pa.medio ? 'Elegí con qué pagó' : !(Number(pa.monto) > 0) ? 'Escribí cuánto pagó'
+    const errParcial = pa && (!pa.medio ? 'Elegí con qué pagó'
+      : pa.medio === 'transferencia' && !pa.destino ? 'Elegí a qué cuenta fue la transferencia'
+      : !(Number(pa.monto) > 0) ? 'Escribí cuánto pagó'
       : debe <= 0 ? 'Si pagó todo, usá "Cobrar"' : null);
 
     el.innerHTML = htmlTurnoTicket() + filas.map(htmlItem).join('') +
@@ -424,6 +454,7 @@
       (pa ? '<div class="pagos parcial"><b>Pagó una parte</b>' +
         '<div class="medios">' + MEDIOS.map(([k, n]) => '<button type="button" class="medio' + (pa.medio === k ? ' activo' : '') +
           '" data-pmedio="' + k + '">' + n + '</button>').join('') + '</div>' +
+        htmlDestino(pa, 'id="parcialDestino"') +
         '<label class="monto">Pagó $ <input type="number" inputmode="decimal" min="0" id="parcialMonto" value="' + (pa.monto == null ? '' : esc(pa.monto)) + '"></label>' +
         '<div id="parcialDebe">' + (debe != null && debe > 0 ? 'Queda debiendo <b class="error">' + plata(debe) + '</b> (pasa a Deudores)' : '') + '</div>' +
         '</div>' : '') +
@@ -506,6 +537,7 @@
     const pa = estado === 'parcial' ? S.parcial : null;
     if (pa) {
       if (!pa.medio || !(Number(pa.monto) > 0) || Number(pa.monto) >= total) { toast('Revisá cuánto pagó', 'error'); return; }
+      if (pa.medio === 'transferencia' && !pa.destino) { toast('Elegí a qué cuenta fue la transferencia', 'error'); return; }
       estado = 'pendiente';
     }
     const sinRegla = filas.filter((f) => f.r.sinRegla);
@@ -514,8 +546,8 @@
           S.cat.profesionales.find((p) => p.id === f.it.profesional_id).nombre).join('\n') +
         '\n\nSe guarda sin comisión y queda en la lista para que Franco cargue la regla. ¿Seguir?')) return;
 
-    const venta = nuevaVenta(estado, S.items.map(payloadItem), S.pagos.map((x) => ({ medio: x.medio, monto: Number(x.monto) })));
-    if (pa) { venta.entrega = [{ medio: pa.medio, monto: Number(pa.monto) }]; venta.entrega_id = window.Cola.uuid(); }
+    const venta = nuevaVenta(estado, S.items.map(payloadItem), S.pagos.map(pagoPayload));
+    if (pa) { venta.entrega = [pagoPayload(pa)]; venta.entrega_id = window.Cola.uuid(); }
     const op = window.Cola.agregar('venta', venta);
     const nombre = esOcasional() ? (S.nombreOcasional.trim() || 'Sin ficha') : S.paciente.nombre;
     const prof = S.items.map((i) => i.profesional_id).find(Boolean);
@@ -738,7 +770,7 @@
       descripcion: o.payload.items.map((i) => descItem(i)).join(' + '),
       total: o.payload.items.reduce((a, i) => a + (i.tipo === 'pack_sesion' ? 0 : Number(i.precio_cobrado) || 0), 0) -
              (o.payload.entrega || []).reduce((a, p) => a + Number(p.monto), 0),
-      pagos: o.payload.estado === 'pendiente' ? (o.payload.entrega || []) : [],
+      pagos: o.payload.estado === 'pendiente' ? (o.payload.entrega || []) : (o.payload.pagos || []),
       enCola: true, error: o.error,
     }));
   }
@@ -800,8 +832,8 @@
   function turnosSinCobrar() {
     if (S.turnos.fecha !== S.fecha) return [];
     const enCola = new Set(window.Cola.leer().filter((o) => o.tipo === 'venta' && o.payload.turno_ref).map((o) => o.payload.turno_ref));
-    const cobrados = new Set(S.turnos.cobrados);
-    return S.turnos.lista.filter((t) => !cobrados.has(t.ref) && !enCola.has(t.ref));
+    const fuera = new Set(S.turnos.cobrados.concat(S.turnos.descartados || []));
+    return S.turnos.lista.filter((t) => !fuera.has(t.ref) && !enCola.has(t.ref));
   }
 
   function renderTurnos() {
@@ -819,9 +851,35 @@
         return '<div class="pend"><div class="pend-top"><div><b>' + esc(t.nom || '(sin nombre)') + '</b> · ' + esc(t.tr || '—') +
           '<div class="tenue">' + horaTurno(t.hora) + (p ? ' · ' + esc(p.nombre) : '') + (t.obs ? ' · ' + esc(t.obs) : '') + '</div></div>' +
           (actual ? '<span class="tenue">en el ticket</span>'
-                  : '<button type="button" class="primario" data-turno="' + esc(t.ref) + '">Cobrar</button>') +
+                  : '<div class="fila" style="flex-wrap:nowrap"><button type="button" class="primario" data-turno="' + esc(t.ref) + '">Cobrar</button>' +
+                    '<button type="button" class="link" data-sacarturno="' + esc(t.ref) + '" title="Ya se cobró por otro lado, o no se cobra">quitar</button></div>') +
           '</div></div>';
       }).join('');
+  }
+
+  // Sacar un turno de la lista (ya se cobró por otro lado, o no se cobra).
+  // Queda guardado en la base para todos; no toca el dashboard.
+  async function sacarTurno(ref) {
+    const t = S.turnos.lista.find((x) => x.ref === ref);
+    const motivo = prompt('¿Sacar a ' + (t ? t.nom : 'este turno') + ' de la lista? Contá por qué (opcional):', 'Ya se cobró');
+    if (motivo === null) return;
+    if (!navigator.onLine) { toast('Para sacarlo de la lista hace falta conexión', 'error'); return; }
+    const { error } = await sb.rpc('descartar_turno', { p_ref: ref, p_motivo: motivo });
+    if (error) { toast(/descartar_turno/.test(error.message || '') ? 'Falta correr 11_cobros_directos.sql en Supabase' : error.message, 'error'); return; }
+    S.turnos.descartados = (S.turnos.descartados || []).concat(ref);
+    if (S.turno && S.turno.ref === ref) S.turno = null;
+    LS.set('turnos', S.turnos);
+    render();
+    toast('Sacado de la lista', 'ok', 6000, {
+      texto: 'Deshacer',
+      accion: async () => {
+        const r = await sb.rpc('restaurar_turno', { p_ref: ref });
+        if (r.error) { toast(r.error.message, 'error'); return; }
+        S.turnos.descartados = S.turnos.descartados.filter((x) => x !== ref);
+        LS.set('turnos', S.turnos);
+        render();
+      },
+    });
   }
 
   // Un toque: arma el ticket con lo que dice el turno. Lo que no se puede
@@ -870,8 +928,12 @@
     const lista = cola.concat(srv);
     const el = $('#hoy');
     if (!lista.length) { el.innerHTML = '<p class="tenue">Todavía nada.</p>'; return; }
-    const cobrado = lista.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total, 0) +
-      lista.filter((v) => v.estado === 'pendiente').reduce((a, v) => a + (v.pagos || []).reduce((s, p) => s + Number(p.monto), 0), 0);
+    // Lo que recibió directo una profesional no entró a MEK: va aparte.
+    const sumaPagos = (v, directo) => (v.pagos || []).filter((p) => !!p.profesional_id === directo).reduce((s, p) => s + Number(p.monto), 0);
+    const validas = lista.filter((v) => v.estado !== 'anulada');
+    const directo = validas.reduce((a, v) => a + sumaPagos(v, true), 0);
+    const cobrado = validas.filter((v) => v.estado === 'cobrada').reduce((a, v) => a + v.total - sumaPagos(v, true), 0) +
+      validas.filter((v) => v.estado === 'pendiente').reduce((a, v) => a + sumaPagos(v, false), 0);
     // Las anuladas no suman en nada (caja, comisiones, liquidaciones):
     // quedan guardadas solo como registro, plegadas al final.
     const fila = (v) => {
@@ -879,7 +941,10 @@
         const anulando = ops.some((o) => o.tipo === 'anular');
         const estado = anulando ? 'anulando…' : v.estado;
         const key = v.id ? 'id:' + v.id : 'c:' + v.client_id;
-        const pagos = v.pagos && v.pagos.length > 1 ? v.pagos.map((p) => nombreMedio(p.medio) + ' ' + plata(p.monto)).join(' + ')
+        const profs = S.cat ? S.cat.profesionales : [];
+        const unPago = (p) => nombreMedio(p.medio) + (window.MEK.textoDestino(p, profs) ? ' ' + window.MEK.textoDestino(p, profs) : '');
+        const pagos = v.pagos && v.pagos.length > 1 ? v.pagos.map((p) => unPago(p) + ' ' + plata(p.monto)).join(' + ')
+          : v.pagos && v.pagos.length === 1 ? unPago(v.pagos[0])
           : (v.medio ? nombreMedio(v.medio) : '');
         return '<div class="hoy ' + esc(v.estado) + (anulando ? ' anulada' : '') + '">' +
           '<div><b>' + esc(v.pacienteNombre) + '</b> · ' + esc(v.descripcion) +
@@ -890,7 +955,8 @@
           '</div></div>';
     };
     const anuladas = lista.filter((v) => v.estado === 'anulada');
-    el.innerHTML = '<div class="tenue">Cobrado (bruto, caja): <b>' + plata(C.r2(cobrado)) + '</b></div>' +
+    el.innerHTML = '<div class="tenue">Cobrado (bruto, caja): <b>' + plata(C.r2(cobrado)) + '</b>' +
+      (directo ? ' · cobrado directo por profesionales: <b>' + plata(C.r2(directo)) + '</b>' : '') + '</div>' +
       lista.filter((v) => v.estado !== 'anulada').map(fila).join('') +
       (anuladas.length ? '<details class="anuladas"><summary>' + anuladas.length + (anuladas.length === 1 ? ' anulada' : ' anuladas') +
         ' (no cuentan para nada, quedan solo como registro)</summary>' + anuladas.map(fila).join('') + '</details>' : '');
@@ -992,9 +1058,15 @@
     }
     if (t.id === 'btnParcialAbrir') { S.parcial = { medio: null, monto: null }; renderTicket(); $('#parcialMonto').focus(); return; }
     if (t.id === 'cancelarParcial') { S.parcial = null; renderTicket(); return; }
-    if (d.pmedio) { S.parcial.medio = d.pmedio; renderTicket(); return; }
+    if (d.pmedio) {
+      S.parcial.medio = d.pmedio;
+      if (S.parcial.destino && !S.parcial.destino.startsWith('p:') && d.pmedio !== 'transferencia') S.parcial.destino = '';
+      renderTicket();
+      return;
+    }
     if (t.id === 'btnParcial') { confirmar('parcial'); return; }
     if (d.turno) { usarTurno(d.turno); return; }
+    if (d.sacarturno) { sacarTurno(d.sacarturno); return; }
     if (d.soltarturno !== undefined) { S.turno = null; render(); return; }
     if (t.id === 'recargarTurnos') { cargarTurnos().then(render); return; }
     if (t.id === 'cambiarPaciente') { S.paciente = null; S.transfiriendo = null; render(); $('#buscarPaciente').focus(); return; }
@@ -1046,7 +1118,10 @@
     // pagos del ticket (prefijo t) y de la bandeja (prefijo b)
     for (const [pre, lista] of [['t', S.pagos], ['b', S.pagosPendiente]]) {
       if (d[pre + 'medio'] !== undefined) {
-        lista[Number(d[pre + 'medio'])].medio = d.valor;
+        const pg = lista[Number(d[pre + 'medio'])];
+        pg.medio = d.valor;
+        // Las cuentas (alias/QR) son solo de transferencias.
+        if (pg.destino && !pg.destino.startsWith('p:') && d.valor !== 'transferencia') pg.destino = '';
         pre === 't' ? renderTicket() : renderBandeja();
         return;
       }
@@ -1074,7 +1149,7 @@
       ajustarPagos(S.pagosPendiente, total);
       const e = validarPagos(S.pagosPendiente, total);
       if (e) { toast(e, 'error'); return; }
-      const pagos = S.pagosPendiente.map((x) => ({ medio: x.medio, monto: Number(x.monto) }));
+      const pagos = S.pagosPendiente.map(pagoPayload);
       const k = buscarVentaKey(d.cobrarpend);
       if (!(k.client_id && window.Cola.cobrarEnCola(k.client_id, pagos))) {
         window.Cola.agregar('cobrar', Object.assign(k, { pagos }));
@@ -1143,13 +1218,17 @@
     }
     if (t.id === 'nota') { S.nota = t.value; return; }
     if (t.id === 'nombreOcasional') { S.nombreOcasional = t.value; return; }
+    if (d.tdestino !== undefined) { S.pagos[Number(d.tdestino)].destino = t.value; renderTicket(); return; }
+    if (d.bdestino !== undefined) { S.pagosPendiente[Number(d.bdestino)].destino = t.value; renderBandeja(); return; }
+    if (t.id === 'parcialDestino') { S.parcial.destino = t.value; renderTicket(); return; }
     if (t.id === 'parcialMonto') {
       // Se actualiza en el lugar, sin redibujar: si no, el clic en
       // "Guardar" justo después de escribir se pierde.
       S.parcial.monto = t.value.trim() === '' ? null : Math.max(0, Number(t.value.replace(',', '.')) || 0);
       const total = calcular().total;
       const debe = C.r2(total - (Number(S.parcial.monto) || 0));
-      const ok = S.parcial.medio && Number(S.parcial.monto) > 0 && debe > 0;
+      const ok = S.parcial.medio && Number(S.parcial.monto) > 0 && debe > 0 &&
+        !(S.parcial.medio === 'transferencia' && !S.parcial.destino);
       $('#parcialDebe').innerHTML = Number(S.parcial.monto) > 0 && debe > 0
         ? 'Queda debiendo <b class="error">' + plata(debe) + '</b> (pasa a Deudores)'
         : Number(S.parcial.monto) > 0 ? '<span class="error">Si pagó todo, usá "Cobrar"</span>' : '';

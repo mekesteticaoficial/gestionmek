@@ -285,3 +285,8 @@ details.anuladas summary { cursor: pointer; color: var(--suave, #777); padding: 
 .resultados li.sin-ficha button { width: 100%; text-align: center; border: 1px solid var(--marca); color: var(--marca); border-radius: 8px; }
 .aviso-cabina { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
   padding: 10px; margin-bottom: 10px; background: var(--marca-suave); border-radius: 8px; }
+
+/* A qué cuenta fue el pago */
+.destino { display: flex; align-items: center; gap: 6px; font-size: .9rem; margin-top: 6px; }
+.destino select { width: auto; min-height: 36px; padding: 4px 8px; }
+.destino.falta select { border-color: var(--mal); }

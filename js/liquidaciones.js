@@ -229,7 +229,7 @@
           '</td><td class="num"><b>' + M.plata(neto) + '</b></td><td>' +
           (l.estado === 'pagada' ? '<span class="pill ok">pagada ' + M.fechaCorta(l.pagada_en) + '</span>' : '<span class="pill espera">a pagar</span>') +
           '</td><td><button type="button" class="link" data-detalle="' + l.id + '">ver</button>' +
-          (l.estado === 'cerrada' ? ' <button type="button" class="link" data-pagar="' + l.id + '">pagar</button>' : '') + '</td></tr>';
+          (l.estado === 'cerrada' ? ' <button type="button" class="link" data-pagar="' + l.id + '">' + (neto < 0 ? 'cobrarle' : 'pagar') + '</button>' : '') + '</td></tr>';
       }).join('') : '<tr><td colspan="8" class="tenue">Todavía no se cerró ninguna.</td></tr>') + '</tbody>';
   }
 
@@ -284,12 +284,19 @@
       if (!medio) return;
       medio = M.norm(medio).replace(/\s/g, '');
       if (!M.MEDIOS.some(([k]) => k === medio)) { M.toast('Medio no reconocido', 'error'); return; }
-    } else if (!confirm('El saldo es ' + M.plata(neto) + ': no se paga nada y la diferencia pasa a la próxima. ¿Marcar como resuelta?')) return;
+    } else if (neto < 0) {
+      // Le debe a MEK (cobró directo más de lo que le correspondía).
+      const r = prompt('Le debe ' + M.plata(-neto) + ' a MEK.\n\nSi ya te lo pagó, escribí con qué (efectivo, transferencia, debito, credito, mercadopago).\n' +
+                       'Si no, dejalo vacío: se le descuenta de la próxima.', '');
+      if (r === null) return;
+      medio = r.trim() ? M.norm(r).replace(/\s/g, '') : null;
+      if (medio && !M.MEDIOS.some(([k]) => k === medio)) { M.toast('Medio no reconocido', 'error'); return; }
+    } else if (!confirm('El saldo es ' + M.plata(neto) + ': no hay nada que pagar. ¿Marcar como resuelta?')) return;
     const fecha = prompt('Fecha del pago (AAAA-MM-DD):', M.hoy());
     if (!fecha) return;
     const { error } = await sb.rpc('pagar_liquidacion', { p_liq: id, p_fecha: fecha, p_medio: medio });
     if (error) { M.toast(M.mensaje(error), 'error'); return; }
-    M.toast('Pagada. Queda registrada como gasto.', 'ok');
+    M.toast(neto > 0 ? 'Pagada. Queda registrada como gasto.' : neto < 0 && medio ? 'Cobrado: entra a la caja.' : 'Resuelta.', 'ok');
     cargarHistorial();
     cargarHoy();
   }

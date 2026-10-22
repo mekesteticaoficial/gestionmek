@@ -586,7 +586,7 @@
         (p.telefono ? '<span class="tenue"> · …' + esc(String(p.telefono).slice(-4)) + '</span>' : '') + '</button></li>').join('') +
         (q.trim() && !res.length ? '<li class="tenue">No aparece. Tiene que estar cargada en el dashboard; ' +
           'si la acaban de cargar, esperá unos segundos y buscá de nuevo.</li>' : '') +
-        '<li><button type="button" class="link" id="sinFicha">No tiene ficha (vino de paso, ej. una cabina rápida)</button></li>';
+        '<li class="sin-ficha"><button type="button" class="secundario" id="sinFicha">No tiene ficha · vino de paso (ej. una cabina)</button></li>';
       if (!$('#pacientesEstado').textContent) $('#pacientesEstado').textContent = S.pacientes.length + ' pacientes';
       return;
     }
@@ -676,7 +676,9 @@
         (f && !lista.length ? '<p class="tenue">Ningún tratamiento con ese nombre.</p>' : '');
     } else if (S.tab === 'cabina') {
       const lista = S.cat.tratamientos.filter((t) => t.categoria === 'cabina');
-      el.innerHTML = '<div class="grilla">' + lista.map((t) =>
+      el.innerHTML = (!S.paciente ? '<div class="aviso-cabina"><span>¿Vino de paso y no tiene ficha?</span>' +
+          '<button type="button" class="secundario" data-sinficha style="width:auto">Cobrar sin ficha</button></div>' : '') +
+        '<div class="grilla">' + lista.map((t) =>
         '<button type="button" class="opcion" data-cabina="' + t.id + '"><span>' + esc(t.nombre) + '</span><small>' +
         precio(t) + (t.pack_sesiones ? ' · ' + t.pack_sesiones + ' sesiones' : '') + '</small></button>').join('') + '</div>' +
         '<p class="tenue">Para usar una sesión de un pack ya comprado, elegí la paciente: aparece arriba.</p>';
@@ -981,7 +983,7 @@
       cargarHistorial(S.paciente.ref);
       return;
     }
-    if (t.id === 'sinFicha') {
+    if (t.id === 'sinFicha' || d.sinficha !== undefined) {
       S.paciente = S.pacientes.find((p) => p.ref === OCASIONAL) || { ref: OCASIONAL, nombre: 'Sin ficha (ocasional)', telefono: null, email: null };
       S.transfiriendo = null;
       S.historial = null;
@@ -1011,6 +1013,7 @@
     }
     if (d.cabina) {
       const tr = S.cat.tratamientos.find((x) => x.id === Number(d.cabina));
+      if (tr.pack_sesiones && esOcasional()) { toast('La promo tiene que quedar a nombre de alguien con ficha: buscá a la paciente en el paso 1', 'error', 6000); return; }
       agregarItem({ tipo: tr.pack_sesiones ? 'pack_venta' : 'cabina', tratamiento_id: tr.id });
       return;
     }

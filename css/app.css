@@ -279,3 +279,9 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: .92rem; }
 details.anuladas { margin-top: 8px; font-size: .9rem; }
 details.anuladas summary { cursor: pointer; color: var(--suave, #777); padding: 6px 0; }
 .pagos.parcial { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--marca); border-radius: 8px; }
+
+/* "Sin ficha" visible en Cobro */
+.resultados li.sin-ficha { padding-top: 10px; }
+.resultados li.sin-ficha button { width: 100%; text-align: center; border: 1px solid var(--marca); color: var(--marca); border-radius: 8px; }
+.aviso-cabina { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 10px; margin-bottom: 10px; background: var(--marca-suave); border-radius: 8px; }

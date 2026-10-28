@@ -61,17 +61,22 @@
   function reintentar(id) {
     const ops = leer();
     const op = ops.find((o) => o.id === id);
-    if (op) { op.error = null; escribir(ops); }
+    if (op) { op.error = null; op.intentos = 0; escribir(ops); }
   }
 
   // Error de red o de sesión vencida: se reintenta. Error de la base
   // (una validación de registrar_venta): no se reintenta solo.
+  // Un error sin código que no es de red NO se reintenta para siempre
+  // (antes quedaba trabado con cientos de intentos).
   function esReintentable(err) {
     if (!err) return false;
     if (err instanceof TypeError) return true;
-    const code = err.code || '';
-    return !code || code.startsWith('PGRST3') || code === '401' || /fetch|network|jwt/i.test(err.message || '');
+    const code = String(err.code || '');
+    if (/fetch|network|jwt|timeout|tiempo/i.test(err.message || '')) return true;
+    return code.startsWith('PGRST3') || code === '401' || code === '408' || code.startsWith('5');
   }
+  const ES_RED = (err) => err instanceof TypeError || /fetch|network/i.test(err.message || '');
+  const MAX_INTENTOS = 30;   // ~10 minutos con la app abierta; la red caída se reintenta siempre
 
   async function idPorClient(sb, clientId, tabla) {
     const { data, error } = await sb.from(tabla || 'ventas').select('id').eq('client_id', clientId).maybeSingle();
@@ -113,8 +118,13 @@
     if (error) throw error;
   }
 
+  // Nombre corto de una operación, para los mensajes.
+  const nombreOp = (o) => o.tipo + (o.payload && o.payload.paciente ? ' de ' + o.payload.paciente.nombre : '');
+
   // Sube en orden. Se frena en la primera que falla por red, para no
   // desordenar (un "anular" no puede llegar antes que su venta).
+  // Lo que no se puede subir queda marcado con el motivo y NO frena al
+  // resto: así un error no deja todas las demás esperando.
   async function procesar(sb) {
     if (procesando || !navigator.onLine) return;
     procesando = true;
@@ -129,8 +139,21 @@
           const o = ops.find((x) => x.id === op.id);
           if (!o) continue;
           o.intentos++;
-          if (err.code === 'espera' || esReintentable(err)) { escribir(ops); break; }
-          o.error = err.message || String(err);
+          o.ultimo = err.message || String(err);
+          if (err.code === 'espera') {
+            // Depende de una venta (o gasto) que todavía no está en la base.
+            const cid = o.payload.client_id;
+            const duena = ops.find((x) => x !== o && (x.tipo === 'venta' || x.tipo === 'gasto') && x.payload.client_id === cid);
+            if (duena && duena.error) {
+              o.error = 'Depende de "' + nombreOp(duena) + '", que tiene un error. Resolvé ese primero (Reintentar o descartar) y después reintentá esta.';
+            } else if (!duena) {
+              o.error = 'La venta a la que se refiere no está en la base ni en este navegador (se descartó). Esta operación se puede descartar.';
+            } else { escribir(ops); break; }
+            escribir(ops);
+            continue;
+          }
+          if (esReintentable(err) && (ES_RED(err) || o.intentos < MAX_INTENTOS)) { escribir(ops); break; }
+          o.error = o.ultimo + (o.intentos >= MAX_INTENTOS ? ' (se intentó ' + o.intentos + ' veces)' : '');
           escribir(ops);
         }
       }

@@ -45,6 +45,11 @@
       '<line x1="0" x2="' + W + '" y1="' + (H - pad.b) + '" y2="' + (H - pad.b) + '" class="base"></line>' + barras + '</svg>';
   }
 
+  // Nombre de un rubro de ganancias(): terceros por persona, lo de MEK por categoría.
+  const RUBROS = { facial: 'Faciales', corporal: 'Corporales', depilacion: 'Depilación', capilar: 'Capilar', masajes: 'Masajes',
+    cabina: 'Cabina', combo: 'Combos', productos_propio: 'Productos propios', productos_consignacion: 'Productos en consignación', otros: 'Otros cobros' };
+  const rubroNombre = (r) => (r.clase === 'tercero' ? r.rubro : RUBROS[r.rubro] || r.rubro);
+
   // Barras horizontales (profesionales, tratamientos).
   function barrasH(filas, valor, etiqueta, detalle) {
     const max = Math.max(1, ...filas.map(valor));
@@ -57,7 +62,11 @@
     const desde = iso(lunes), hasta = iso(mas(lunes, 6));
     $('#semanaTitulo').textContent = 'Semana del ' + M.fechaCorta(desde).slice(0, 5) + ' al ' + M.fechaCorta(hasta);
     $('#semanaSig').disabled = iso(lunesDe(new Date())) <= desde;
-    const { data, error } = await sb.rpc('resumen_periodo', { p_desde: desde, p_hasta: hasta });
+    const [{ data, error }, gan] = await Promise.all([
+      sb.rpc('resumen_periodo', { p_desde: desde, p_hasta: hasta }),
+      sb.rpc('ganancias', { p_desde: desde, p_hasta: hasta }),
+    ]);
+    const g = gan.error ? null : gan.data;   // sin 14_ganancias.sql, no se muestra
     const el = $('#semanaDatos');
     if (error) {
       el.innerHTML = '<p class="tenue">' + (/resumen_periodo/.test(error.message || '') ? 'Falta correr 07_mejoras.sql en Supabase.' : M.esc(M.mensaje(error))) + '</p>';
@@ -68,6 +77,7 @@
     el.innerHTML =
       '<div class="kpis">' +
         kpi('Facturado', P(d.facturado), variacion(Number(d.facturado), Number(d.previo.facturado)), 'destacado') +
+        (g ? kpi('Queda para MEK', P(g.queda_mek), 'después de comisiones y terceros · ganancia neta ' + P(g.ganancia), 'destacado') : '') +
         kpi('Ticket promedio', d.ticket_promedio == null ? '—' : P(d.ticket_promedio), d.ventas + ' venta(s) con importe') +
         kpi('Atenciones', d.atenciones, d.pacientes + ' paciente(s) · ' + d.pacientes_nuevas + ' nueva(s)') +
         kpi('Cobrado', P(d.cobrado), Number(d.sin_cobrar) ? '<span class="error">' + P(d.sin_cobrar) + ' sin cobrar</span>' : 'nada sin cobrar') +
@@ -78,6 +88,8 @@
         '<div><h3>Facturado por día</h3>' + barrasDias(d.por_dia) + '</div>' +
         '<div><h3>Por profesional</h3>' + (d.por_profesional.length ? barrasH(d.por_profesional, (f) => Number(f.facturado), (f) => f.profesional,
           (f) => f.atenciones + (Number(f.atenciones) === 1 ? ' atención · ' : ' atenciones · ') + (f.modelo === 'interno' ? 'comisión ' + P(f.comision) : 'su parte ' + P(f.tercero))) : '<p class="tenue">Sin atenciones.</p>') +
+        (g && g.rubros.length ? '<h3>Lo que deja a MEK</h3>' + barrasH(g.rubros, (f) => Number(f.mek), rubroNombre,
+          (f) => 'de ' + P(f.cobrado) + ' cobrado') : '') +
         '<h3>Lo más vendido</h3>' + (d.top.length ? barrasH(d.top, (f) => Number(f.facturado), (f) => f.nombre, (f) => f.cantidad + (Number(f.cantidad) === 1 ? ' vez' : ' veces')) : '<p class="tenue">Sin ventas.</p>') +
         '</div>' +
       '</div>' +

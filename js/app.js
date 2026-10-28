@@ -157,14 +157,16 @@
       sb.from('ventas').select(sel).eq('fecha', S.fecha).order('id', { ascending: false }),
       sb.from('ventas').select(sel).eq('estado', 'pendiente').order('fecha').order('id'),
       S.usuario && S.usuario.rol === 'admin'
-        ? sb.from('v_items_sin_regla').select('item_id', { count: 'exact', head: true })
-        : Promise.resolve({ count: 0 }),
+        ? sb.from('v_items_sin_regla').select('venta_id,fecha,descripcion,profesional').order('fecha', { ascending: false })
+        : Promise.resolve({ data: [] }),
     ]);
     if (h.error) throw h.error;
     if (p.error) throw p.error;
     S.ventasHoy = h.data;
     S.pendientes = p.data;
-    S.sinRegla = s.count || 0;
+    // Cuáles son, para poder verlos (no solo cuántos).
+    S.sinReglaLista = s.data || [];
+    S.sinRegla = S.sinReglaLista.length;
     LS.set('ventasHoy', S.ventasHoy);
     LS.set('pendientes', S.pendientes);
   }
@@ -1043,10 +1045,19 @@
       (ops.length ? ops.map((o) => '<div class="op"><div><b>' + esc(o.tipo) + '</b> · ' +
         esc(new Date(o.creado).toLocaleString('es-AR')) +
         (o.tipo === 'venta' ? ' · ' + esc(o.payload.paciente ? o.payload.paciente.nombre : o.payload.paciente_ref) : '') +
-        (o.error ? '<div class="error">' + esc(o.error) + '</div>' : '<div class="tenue">esperando conexión (' + o.intentos + ' intentos)</div>') +
+        (o.error ? '<div class="error">' + esc(o.error) + '</div>'
+          : '<div class="tenue">esperando para subir (' + o.intentos + ' intentos)' +
+            (o.ultimo && o.intentos ? ' · último motivo: ' + esc(o.ultimo) : '') + '</div>') +
         '</div>' + (o.error ? '<div class="fila"><button type="button" data-reintentar="' + o.id + '">Reintentar</button>' +
         '<button type="button" class="link peligro" data-descartar="' + o.id + '">descartar</button></div>' : '') +
         '</div>').join('') : '<p class="tenue">No hay nada pendiente.</p>') +
+      (S.sinRegla ? '<h3 style="margin-top:14px">Cobros sin regla de comisión (' + S.sinRegla + ')</h3>' +
+        '<p class="tenue">Se guardaron sin comisión porque cuando se cobraron no había regla para esa profesional y ese tratamiento.</p>' +
+        S.sinReglaLista.slice(0, 15).map((x) => '<div class="op"><div>' + C.fechaCorta(x.fecha) + ' · ' + esc(x.descripcion) +
+          ' · <b>' + esc(x.profesional) + '</b></div></div>').join('') +
+        (S.sinRegla > 15 ? '<p class="tenue">…y ' + (S.sinRegla - 15) + ' más.</p>' : '') +
+        '<div class="fila"><button type="button" id="resolverSinRegla" class="primario">Recalcular con las reglas de ahora</button>' +
+        '<a href="catalogo.html#comisiones">cargar una regla</a></div>' : '') +
       '<div class="acciones fila"><button type="button" id="subirAhora" class="primario">Subir ahora</button>' +
       '<button type="button" id="cerrarDlg">Cerrar</button></div>';
   }
@@ -1236,6 +1247,15 @@
 
     if (t.id === 'sync') { renderDlgCola(); $('#dlgCola').showModal(); return; }
     if (t.id === 'cerrarDlg') { $('#dlgCola').close(); return; }
+    if (t.id === 'resolverSinRegla') {
+      sb.rpc('resolver_items_sin_regla').then(async ({ data, error }) => {
+        if (error) { toast(error.message, 'error'); return; }
+        toast(data.resueltos + ' recalculado(s)' + (data.quedan ? '; quedan ' + data.quedan + ' sin regla: falta cargarles la regla' : ''), data.quedan ? 'error' : 'ok', 7000);
+        await cargarVentas().catch(() => {});
+        renderDlgCola(); renderSync();
+      });
+      return;
+    }
     if (t.id === 'subirAhora') { subir().then(() => { renderDlgCola(); }); return; }
     if (d.reintentar) { window.Cola.reintentar(d.reintentar); subir().then(renderDlgCola); return; }
     if (d.descartar) {

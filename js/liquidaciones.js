@@ -306,9 +306,13 @@
   function situacion(a) {
     if (a.estado === 'anulada') return ['tenue', 'Anulada: no cuenta'];
     if (!a.profesional_id) return ['tenue', a.tipo === 'producto' ? 'Producto: sin profesional' : 'Sin profesional (no lleva comisión)'];
-    if (a.estado === 'pendiente') return ['aviso', 'Sin cobrar todavía: entra cuando se termine de cobrar'];
+    // Yael (comisión): cuenta lo devengado, aunque no esté cobrado (13).
+    // Terceros: su parte entra recién cuando se cobra.
+    if (a.estado === 'pendiente' && a.modelo !== 'interno') return ['aviso', 'Sin cobrar todavía: su parte entra cuando se termine de cobrar'];
+    const sinCobrar = a.estado === 'pendiente' ? ' · sin cobrar (entra igual)' : '';
     if (a.comision_tipo == null && a.modelo !== 'invitado_cobra_el') return ['error', 'Sin regla de comisión: no suma hasta cargarla'];
-    if (a.liquidacion_id) return ['ok', 'Liquidada (n.º ' + a.liquidacion_id + ')'];
+    if (a.liquidacion_id) return ['ok', 'Liquidada (n.º ' + a.liquidacion_id + ')' + sinCobrar];
+    if (sinCobrar && Number(a.comision_monto) > 0) return ['ok', 'Para la próxima liquidación' + sinCobrar];
     if (a.modelo === 'interno' && !(Number(a.comision_monto) > 0)) return ['tenue', 'Sin comisión (queda para MEK)'];
     if (a.modelo === 'invitado_cobra_el') return ['tenue', 'Cobró ella/él: solo se registró la parte de MEK'];
     return ['ok', 'Para la próxima liquidación'];

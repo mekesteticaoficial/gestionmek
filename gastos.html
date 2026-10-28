@@ -20,6 +20,13 @@
   <main class="pagina">
     <section class="card">
       <h2>Cargar un gasto</h2>
+      <div class="comprobante-carga">
+        <label class="secundario boton-archivo">📷 Foto o PDF de la factura
+          <input type="file" id="archivo" accept="image/*,application/pdf" hidden>
+        </label>
+        <span class="tenue">Opcional: queda guardada junto al gasto, para tenerla a mano.</span>
+        <div id="adjunto"></div>
+      </div>
       <form id="form" class="form" autocomplete="off">
         <label>Fecha <input type="date" id="fecha" required></label>
         <label>Tipo
@@ -31,6 +38,7 @@
         </label>
         <label>Categoría <input id="categoria" list="categorias" required placeholder="alquiler, luz, insumos…"></label>
         <label>Monto $ <input type="number" id="monto" inputmode="decimal" min="0" step="0.01" required></label>
+        <label>Proveedor <input id="proveedor" placeholder="Opcional"></label>
         <label class="ancho">Detalle <input id="descripcion" placeholder="Opcional"></label>
         <div class="ancho">
           <div class="campo">Cómo se pagó</div>

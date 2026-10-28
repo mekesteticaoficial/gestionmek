@@ -7,4 +7,7 @@ window.MEK_CONFIG = {
   // Dashboard de turnos y fichas. Solo se LEE, con GET. Ver js/pacientes.js.
   firebaseDb: 'https://mek-dashboard-default-rtdb.firebaseio.com',
   firebasePacientes: 'mek/p',
+  // Lectura de facturas con IA (supabase/functions/leer-factura). Tiene
+  // costo por uso: apagada. Para activarla, ver su LEEME y poner true.
+  iaFacturas: false,
 };

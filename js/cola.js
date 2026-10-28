@@ -97,6 +97,16 @@
         const r = await sb.rpc('registrar_entrega', { p_venta: data.venta_id, p_pagos: p.entrega, p_client_id: p.entrega_id });
         if (r.error) throw r.error;
       }
+      // Gasto con factura: el archivo ya está en Storage; se vincula ahora.
+      if (op.tipo === 'gasto' && p.comprobante) {
+        const r = await sb.rpc('adjuntar_comprobante', { p_client_id: p.client_id, p_ruta: p.comprobante,
+          p_proveedor: p.proveedor || null, p_datos: p.comprobante_datos || null });
+        if (r.error) throw r.error;
+      } else if (op.tipo === 'gasto' && p.proveedor) {
+        // Sin archivo, el proveedor igual queda anotado.
+        const r = await sb.rpc('adjuntar_proveedor', { p_client_id: p.client_id, p_proveedor: p.proveedor });
+        if (r.error && !/adjuntar_proveedor/.test(r.error.message || '')) throw r.error;
+      }
       return data;
     }
     if (op.tipo === 'a_deudores') {

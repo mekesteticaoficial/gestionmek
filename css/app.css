@@ -294,3 +294,34 @@ details.anuladas summary { cursor: pointer; color: var(--suave, #777); padding: 
 /* Situación de cada atención (Liquidaciones) */
 .tabla .ok { color: #1f7a4a; }
 
+
+/* Ganancia del negocio (Panel) */
+.eerr { max-width: 640px; }
+.eerr-linea { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--borde); }
+.eerr-linea small { display: block; color: var(--suave, #777); font-size: .8rem; font-weight: 400; }
+.eerr-linea.menos b { color: var(--suave, #777); font-weight: 500; }
+.eerr-linea.sub { font-weight: 600; border-bottom: 2px solid var(--borde); }
+.eerr-linea.total { font-size: 1.15rem; border-bottom: 0; padding-top: 10px; }
+.eerr-linea.total b { color: var(--marca); font-size: 1.35rem; }
+.rubros { display: grid; gap: 6px; margin-top: 8px; }
+.rubro { border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; }
+.rubro summary { cursor: pointer; list-style: none; }
+.rubro summary::-webkit-details-marker { display: none; }
+.rubro-top { display: flex; justify-content: space-between; gap: 10px; }
+.rubro-nombre { font-weight: 600; }
+.rubro .hpista { margin: 6px 0 4px; }
+.rubro-det { font-size: .82rem; color: var(--suave, #777); }
+.rubro[open] .tabla-wrap { margin-top: 8px; }
+
+/* Factura adjunta (Gastos) */
+.comprobante-carga { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.boton-archivo { display: inline-flex; align-items: center; width: auto; cursor: pointer; padding: 8px 14px; }
+.comprobante-carga #adjunto { flex-basis: 100%; }
+.adjunto { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.adjunto img { max-height: 120px; max-width: 160px; border-radius: 6px; border: 1px solid var(--borde); object-fit: cover; }
+.adjunto-pdf { padding: 10px 14px; border: 1px solid var(--borde); border-radius: 6px; }
+.lectura { margin-top: 10px; display: grid; gap: 6px; }
+
+/* Reloj o zona horaria mal configurados */
+.aviso-reloj { margin: 8px 16px; font-size: .9rem; }
+

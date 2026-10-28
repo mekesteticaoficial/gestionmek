@@ -180,6 +180,39 @@
     });
   }
 
+  // Reloj y zona horaria de esta computadora. Con el reloj corrido, la
+  // base rechaza la sesión y nada se sincroniza; con otra zona horaria,
+  // las fechas de los cobros salen mal. Se compara con la hora del
+  // servidor de la página (misma origen: el encabezado Date se puede leer).
+  async function chequearReloj() {
+    if (!navigator.onLine || location.protocol === 'file:') return;
+    const avisos = [];
+    try {
+      const r = await fetch(location.pathname + '?reloj=' + Date.now(), { method: 'HEAD', cache: 'no-store' });
+      const srv = Date.parse(r.headers.get('Date') || '');
+      if (srv) {
+        const dif = Math.round((Date.now() - srv) / 60000);
+        if (Math.abs(dif) >= 3) {
+          avisos.push('El reloj de esta computadora está ' + (dif > 0 ? 'adelantado' : 'atrasado') + ' ' +
+            (Math.abs(dif) >= 120 ? Math.round(Math.abs(dif) / 60) + ' horas' : Math.abs(dif) + ' minutos') +
+            '. Así los cobros no se pueden subir.');
+        }
+      }
+    } catch (e) { /* sin red: no se chequea */ }
+    if (new Date().getTimezoneOffset() !== 180) {
+      avisos.push('La zona horaria de esta computadora no es la de Argentina (' +
+        (Intl.DateTimeFormat().resolvedOptions().timeZone || 'desconocida') + '): las fechas pueden salir mal.');
+    }
+    if (!avisos.length) return;
+    const div = document.createElement('div');
+    div.className = 'alerta aviso-reloj';
+    div.innerHTML = '⚠ ' + avisos.map(esc).join(' ') +
+      ' <b>Arreglalo en Windows: Configuración → Hora e idioma → Fecha y hora → activá "Establecer la hora automáticamente" y elegí la zona "(UTC-03:00) Ciudad de Buenos Aires".</b> ' +
+      'En Mac: Ajustes del Sistema → General → Fecha y hora.';
+    document.body.insertBefore(div, document.body.firstChild.nextSibling);
+  }
+  window.addEventListener('load', () => setTimeout(chequearReloj, 1500));
+
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => { /* sin cache offline */ });
   }

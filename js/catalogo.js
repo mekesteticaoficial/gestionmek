@@ -71,6 +71,8 @@
     const futuros = cat.precios.filter((p) => p.tratamiento_id === tid && p.vigente_desde > hoy).sort((a, b) => a.vigente_desde.localeCompare(b.vigente_desde));
     return { vig, futuro: futuros[0] };
   }
+  const htmlFuturo = (f) => (f ? P(f.precio) + ' desde ' + M.fechaCorta(f.vigente_desde) +
+    ' <button type="button" class="link" data-borrarprecio="' + f.id + '" title="Borrar este precio (todavía no rige)">✕</button>' : '');
 
   function renderTratamientos() {
     const lista = cat.tratamientos.filter((t) => !t.pack_sesiones);
@@ -82,10 +84,12 @@
           const { vig, futuro } = precioInfo(t.id);
           const precio = t.precio_variable ? (t.precio_min != null ? P(t.precio_min) + '–' + P(t.precio_max) : 'a presupuestar') : (vig == null ? '<i>sin precio</i>' : P(vig));
           return '<tr class="' + (t.activo ? '' : 'anulado') + '"><td>' + M.esc(t.nombre) + (t.precio_variable ? ' <span class="pill">precio variable</span>' : '') +
-            '</td><td class="num">' + precio + '</td><td>' + (futuro ? P(futuro.precio) + ' desde ' + M.fechaCorta(futuro.vigente_desde) : '') + '</td><td>' +
+            '</td><td class="num">' + precio + '</td><td>' + htmlFuturo(futuro) + '</td><td>' +
             (t.precio_variable ? '<button type="button" class="link" data-rango="' + t.id + '">rango</button>'
               : '<button type="button" class="link" data-precio="' + t.id + '">nuevo precio</button>') +
-            ' <button type="button" class="link" data-activo="' + t.id + '">' + (t.activo ? 'dar de baja' : 'reactivar') + '</button></td></tr>';
+            ' <button type="button" class="link" data-editar="' + t.id + '">editar</button>' +
+            ' <button type="button" class="link" data-activo="' + t.id + '">' + (t.activo ? 'dar de baja' : 'reactivar') + '</button>' +
+            ' <button type="button" class="link" data-eliminar="' + t.id + '">eliminar</button></td></tr>';
         }).join('')).join('') + '</tbody></table></div>';
   }
 
@@ -161,7 +165,9 @@
         const ses = cat.tratamientos.find((x) => x.id === t.pack_tratamiento_id);
         return '<tr class="' + (t.activo ? '' : 'anulado') + '"><td>' + M.esc(t.nombre) + '</td><td class="num">' + t.pack_sesiones + '</td><td>' + M.esc(ses ? ses.nombre : '—') +
           '</td><td class="num">' + P(vig) + '</td><td class="num">' + (vig != null ? P(M.r2(vig / t.pack_sesiones)) : '—') + '</td><td><button type="button" class="link" data-precio="' + t.id +
-          '">nuevo precio</button> <button type="button" class="link" data-activo="' + t.id + '">' + (t.activo ? 'dar de baja' : 'reactivar') + '</button></td></tr>';
+          '">nuevo precio</button> <button type="button" class="link" data-editar="' + t.id + '">editar</button>' +
+          ' <button type="button" class="link" data-activo="' + t.id + '">' + (t.activo ? 'dar de baja' : 'reactivar') + '</button>' +
+          ' <button type="button" class="link" data-eliminar="' + t.id + '">eliminar</button></td></tr>';
       }).join('') : '<tr><td colspan="6" class="tenue">No hay packs.</td></tr>') + '</tbody></table></div>';
   }
 
@@ -203,6 +209,49 @@
     const t = cat.tratamientos.find((x) => x.id === id);
     if (t.activo && !confirm('¿Dar de baja "' + t.nombre + '"? Deja de aparecer para cobrar. Las ventas viejas no cambian.')) return;
     await escribir(sb.from('tratamientos').update({ activo: !t.activo }).eq('id', id), t.activo ? 'Dado de baja' : 'Reactivado');
+  }
+
+  async function editar(id) {
+    const t = cat.tratamientos.find((x) => x.id === id);
+    const campos = [{ id: 'nombre', label: 'Nombre', value: t.nombre, req: true }];
+    if (!t.pack_sesiones) {
+      campos.push({ id: 'categoria', label: 'Categoría', value: t.categoria, list: 'cats', req: true,
+                    ayuda: 'facial, corporal, capilar… Define qué regla de comisión se le aplica si no tiene una propia.' });
+    }
+    const v = await dialogo('Editar · ' + t.nombre, campos,
+      'Las comisiones ya cobradas no cambian. Desde ahora, los cobros nuevos usan la regla de la categoría nueva.');
+    if (!v || !v.nombre) return;
+    const fila = { nombre: v.nombre.trim() };
+    if (!t.pack_sesiones) fila.categoria = (v.categoria || '').trim().toLowerCase();
+    if (fila.nombre === t.nombre && (t.pack_sesiones || fila.categoria === t.categoria)) return;
+    const { error } = await sb.from('tratamientos').update(fila).eq('id', id);
+    if (error) { M.toast(/unique|duplicate/i.test(error.message) ? 'Ya existe un tratamiento con ese nombre' : M.mensaje(error), 'error'); return; }
+    M.toast('Guardado', 'ok');
+    await cargar();
+  }
+
+  async function eliminar(id) {
+    const t = cat.tratamientos.find((x) => x.id === id);
+    const { data: uso, error } = await sb.rpc('uso_tratamiento', { p_id: id });
+    if (error) { M.toast(/uso_tratamiento|function/i.test(error.message) ? 'Falta correr sql/17_catalogo_editable.sql en Supabase' : M.mensaje(error), 'error'); return; }
+    if (uso.cobros || uso.packs_vendidos) {
+      const n = [uso.cobros ? uso.cobros + ' cobro(s)' : '', uso.packs_vendidos ? uso.packs_vendidos + ' pack(s) vendido(s)' : ''].filter(Boolean).join(' y ');
+      if (!t.activo) { M.toast('"' + t.nombre + '" tiene ' + n + ': no se puede eliminar. Ya está dado de baja.', 'error', 8000); return; }
+      if (confirm('"' + t.nombre + '" tiene ' + n + ', así que no se puede eliminar: las ventas viejas lo necesitan.\n\n¿Darlo de baja? Deja de aparecer para cobrar.')) {
+        await escribir(sb.from('tratamientos').update({ activo: false }).eq('id', id), 'Dado de baja');
+      }
+      return;
+    }
+    if (uso.es_sesion_de) { M.toast('"' + t.nombre + '" es la sesión de: ' + uso.es_sesion_de + '. Eliminá primero esos packs.', 'error', 8000); return; }
+    if (!confirm('¿Eliminar "' + t.nombre + '"? Nunca se cobró. Se borran también sus precios y reglas de comisión.')) return;
+    await escribir(sb.rpc('eliminar_tratamiento', { p_id: id }), 'Eliminado');
+  }
+
+  async function borrarPrecio(id) {
+    const p = cat.precios.find((x) => x.id === id);
+    const t = cat.tratamientos.find((x) => x.id === p.tratamiento_id);
+    if (!confirm('¿Borrar el precio de ' + P(p.precio) + ' para "' + t.nombre + '" desde el ' + M.fechaCorta(p.vigente_desde) + '? Todavía no rige.')) return;
+    await escribir(sb.rpc('eliminar_precio_futuro', { p_id: id }), 'Precio borrado');
   }
 
   async function nuevoTratamiento() {
@@ -326,6 +375,9 @@
     if (d.precio) nuevoPrecio(Number(d.precio));
     if (d.rango) rango(Number(d.rango));
     if (d.activo) activo(Number(d.activo));
+    if (d.editar) editar(Number(d.editar));
+    if (d.eliminar) eliminar(Number(d.eliminar));
+    if (d.borrarprecio) borrarPrecio(Number(d.borrarprecio));
     if (d.zona) nuevoPrecioZona(Number(d.zona));
     if (d.promo) precioPromo(Number(d.promo));
     if (d.revisada) revisada(Number(d.revisada));

@@ -3,7 +3,7 @@
 // versión nueva del servidor: un cambio publicado se ve en la apertura
 // siguiente.
 // No toca los pedidos a Supabase ni a Firebase: esos datos los maneja la app.
-const CACHE = 'mek-v15';
+const CACHE = 'mek-v16';
 const APP = [
   './', 'index.html', 'deudores.html', 'cabinas.html', 'giftcards.html', 'gastos.html', 'liquidaciones.html', 'panel.html', 'acreedores.html', 'compras.html', 'catalogo.html',
   'css/app.css', 'js/config.js', 'js/comun.js', 'js/calculo.js', 'js/cola.js', 'js/pacientes.js', 'js/turnos.js', 'js/app.js',
